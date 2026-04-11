@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bloom</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #000;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+      color: #fff;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    /* ── UI overlay ──────────────────────────────────────────────── */
+    #ui {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      pointer-events: none;
+      transition: opacity 2.5s ease;
+    }
+
+    #ui.faded {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    #ui.faded:hover {
+      opacity: 1;
+      pointer-events: all;
+    }
+
+    #ui h1 {
+      font-size: 1.1rem;
+      font-weight: 300;
+      letter-spacing: 0.35em;
+      text-transform: uppercase;
+      opacity: 0.5;
+      margin-bottom: 8px;
+    }
+
+    .connect-row {
+      display: flex;
+      gap: 12px;
+      pointer-events: all;
+    }
+
+    button {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.15);
+      color: rgba(255,255,255,0.75);
+      font-size: 0.78rem;
+      letter-spacing: 0.08em;
+      padding: 9px 20px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.2s, border-color 0.2s, opacity 0.2s;
+    }
+
+    button:hover:not(:disabled) {
+      background: rgba(255,255,255,0.12);
+      border-color: rgba(255,255,255,0.3);
+    }
+
+    button:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+
+    /* ── Status line ─────────────────────────────────────────────── */
+    .status-row {
+      display: flex;
+      gap: 16px;
+      pointer-events: none;
+    }
+
+    .status {
+      font-size: 0.68rem;
+      letter-spacing: 0.06em;
+      opacity: 0.3;
+      transition: opacity 0.4s;
+    }
+
+    .status.active { color: #7dffb3; opacity: 0.7; }
+    .status.error  { color: #ff7d7d; opacity: 0.8; }
+
+    /* ── Corner label ────────────────────────────────────────────── */
+    #preset-label {
+      position: fixed;
+      top: 20px;
+      right: 24px;
+      font-size: 0.65rem;
+      letter-spacing: 0.18em;
+      opacity: 0.2;
+      pointer-events: none;
+    }
+
+    /* ── Error overlay ───────────────────────────────────────────── */
+    #error {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #ff7d7d;
+      font-size: 0.85rem;
+      letter-spacing: 0.05em;
+      text-align: center;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+
+<div id="ui">
+  <h1>Bloom</h1>
+
+  <div class="connect-row">
+    <button id="btn-system">System Audio</button>
+    <button id="btn-mic">Microphone</button>
+    <button id="btn-file">Load File</button>
+    <input type="file" id="file-input" accept="audio/*,video/*" style="display:none">
+  </div>
+
+  <div class="status-row">
+    <span id="status-audio" class="status">Audio: not connected</span>
+  </div>
+</div>
+
+<div id="preset-label">BLOOM</div>
+<div id="error"></div>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
