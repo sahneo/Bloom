@@ -19,6 +19,13 @@ export class AudioAnalyser {
     this._templates  = {};   // band -> Float32Array(frequencyBinCount)
     this._tapSamples = [];   // snapshots accumulated during tap training
     this._tapTarget  = null; // band name being trained right now
+    // Chromagram (12-bin pitch class energy, computed every frame from FFT)
+    this.chromagram  = new Float32Array(12);
+    // Stereo waveform for oscilloscope (time-domain PCM, L and R channels)
+    this.analyserL   = null;
+    this.analyserR   = null;
+    this.waveformL   = null;
+    this.waveformR   = null;
   }
 
   async connectSystemAudio() {
@@ -42,13 +49,43 @@ export class AudioAnalyser {
     this._fileSource.loop = true;
     this._fileSource.connect(this.analyser);
     this.analyser.connect(this.context.destination);
+    this._connectStereo(this._fileSource);
     this._fileSource.start();
   }
 
   _connectStream(stream) {
     this._ensureContext();
     this._ensureAnalyser();
-    this.context.createMediaStreamSource(stream).connect(this.analyser);
+    const source = this.context.createMediaStreamSource(stream);
+    source.connect(this.analyser);
+    this._connectStereo(source);
+  }
+
+  _connectStereo(sourceNode) {
+    this._ensureStereoAnalysers();
+    try {
+      const splitter = this.context.createChannelSplitter(2);
+      sourceNode.connect(splitter);
+      splitter.connect(this.analyserL, 0);
+      splitter.connect(this.analyserR, 1);
+    } catch (_) {
+      // Mono fallback: connect same source to both channels
+      sourceNode.connect(this.analyserL);
+      sourceNode.connect(this.analyserR);
+    }
+  }
+
+  _ensureStereoAnalysers() {
+    if (this.analyserL) return;
+    const fftSize = 2048;
+    this.analyserL = this.context.createAnalyser();
+    this.analyserR = this.context.createAnalyser();
+    this.analyserL.fftSize = fftSize;
+    this.analyserR.fftSize = fftSize;
+    this.analyserL.smoothingTimeConstant = 0;
+    this.analyserR.smoothingTimeConstant = 0;
+    this.waveformL = new Float32Array(fftSize);
+    this.waveformR = new Float32Array(fftSize);
   }
 
   _ensureContext() {
@@ -144,6 +181,24 @@ export class AudioAnalyser {
     // high / atmos: fast and symmetric — high freq is naturally transient-like
     this._smoothed.high = this._smoothed.high * 0.65 + nHigh * 0.35;
 
+    // ── Chromagram (12-bin pitch class energy for audio tonality) ────
+    this.chromagram = this._computeChromagram(binHz);
+
+    // ── Stereo waveform for oscilloscope ─────────────────────────────
+    if (this.analyserL) {
+      this.analyserL.getFloatTimeDomainData(this.waveformL);
+      this.analyserR.getFloatTimeDomainData(this.waveformR);
+      // Pseudo-stereo for mono: delay R by 1/4 buffer ≈ 90° phase shift
+      let rEnergy = 0;
+      for (let i = 0; i < this.waveformR.length; i++) rEnergy += this.waveformR[i] * this.waveformR[i];
+      if (rEnergy < 0.001) {
+        const delay = this.waveformL.length >> 2;   // 512 samples ≈ 11.6ms
+        for (let i = 0; i < this.waveformR.length; i++) {
+          this.waveformR[i] = this.waveformL[(i + delay) % this.waveformL.length];
+        }
+      }
+    }
+
     // ── Template gating (when templates are trained) ─────────────────
     // Build a snapshot of the current spectrum for cosine similarity.
     // Only pay the cost when at least one template exists.
@@ -221,6 +276,29 @@ export class AudioAnalyser {
     if (!this._templates[band] || !currentSpec) return 1.0;
     const sim = this._cosSim(currentSpec, this._templates[band]);
     return Math.min(Math.max((sim - lo) / (hi - lo), 0), 1);
+  }
+
+  // 12-bin chromagram from FFT — sums note harmonics across octaves C2–C7
+  _computeChromagram(binHz) {
+    const chroma = new Float32Array(12);
+    if (!this.dataArray) return chroma;
+    for (let pc = 0; pc < 12; pc++) {
+      let energy = 0, totalW = 0;
+      for (let oct = 2; oct <= 7; oct++) {
+        const midiNote = (oct + 1) * 12 + pc;           // C2=36, C3=48 …
+        const freq = 440 * Math.pow(2, (midiNote - 69) / 12);
+        if (freq > 18000) break;
+        const bin = Math.round(freq / binHz);
+        if (bin < 1 || bin >= this.dataArray.length - 1) continue;
+        const w = 1.0 / oct;                             // lower octaves weighted more
+        energy += (this.dataArray[bin-1]/255 * 0.5 +
+                   this.dataArray[bin  ]/255 * 1.0 +
+                   this.dataArray[bin+1]/255 * 0.5) / 2.0 * w;
+        totalW += w;
+      }
+      chroma[pc] = totalW > 0 ? energy / totalW : 0;
+    }
+    return chroma;
   }
 
   _avg(minHz, maxHz, binHz) {

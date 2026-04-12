@@ -1,8 +1,9 @@
-import { Renderer }        from './renderer.js';
-import { AudioAnalyser }   from './audio.js';
-import { MIDIHandler }     from './midi.js';
-import { HarmonyAnalyzer } from './harmony.js';
-import { ParticlesPreset } from './presets/particles.js';
+import { Renderer }           from './renderer.js';
+import { AudioAnalyser }      from './audio.js';
+import { MIDIHandler }        from './midi.js';
+import { HarmonyAnalyzer }    from './harmony.js';
+import { ParticlesPreset }    from './presets/particles.js';
+import { OscilloscopePreset } from './presets/oscilloscope.js';
 
 const canvas      = document.getElementById('canvas');
 const errorEl     = document.getElementById('error');
@@ -18,6 +19,7 @@ const btnTrain    = document.getElementById('btn-train');
 const trainPanel  = document.getElementById('train');
 const btnMidi     = document.getElementById('btn-midi');
 const statusMidi  = document.getElementById('status-midi');
+const btnOscillo  = document.getElementById('btn-oscillo');
 
 function resize() {
   const dpr = Math.min(devicePixelRatio, 1.5);
@@ -225,10 +227,14 @@ window.addEventListener('keydown', e => {
 const renderer = new Renderer(canvas);
 const audio    = new AudioAnalyser();
 const harmony  = new HarmonyAnalyzer({ bufferMs: 3000 });
+let   lastMidiMs = 0;   // timestamp of most recent MIDI note-on
 const midi     = new MIDIHandler({
-  onNoteOn:  (pitch, velocity) => harmony.noteOn(pitch, velocity),
+  onNoteOn:  (pitch, velocity) => { harmony.noteOn(pitch, velocity); lastMidiMs = performance.now(); },
   onNoteOff: (pitch)           => harmony.noteOff(pitch),
 });
+
+// ── Preset / mode ────────────────────────────────────────────────────
+let currentMode = 'particles';  // 'particles' | 'oscilloscope'
 
 function onConnected(label) {
   statusAudio.textContent = `Audio: ${label}`;
@@ -245,6 +251,19 @@ async function init() {
     errorEl.textContent   = e.message;
     return;
   }
+
+  // Mode switch: particles ↔ oscilloscope
+  btnOscillo.addEventListener('click', async () => {
+    if (currentMode === 'oscilloscope') {
+      currentMode = 'particles';
+      await renderer.loadPreset(ParticlesPreset);
+      btnOscillo.classList.remove('active');
+    } else {
+      currentMode = 'oscilloscope';
+      await renderer.loadPreset(OscilloscopePreset);
+      btnOscillo.classList.add('active');
+    }
+  });
 
   btnMidi.addEventListener('click', async () => {
     try {
@@ -283,11 +302,21 @@ async function init() {
   function frame(ts) {
     const bands = applyBandMutes(audio.update());
     updateDebug(bands);
-    // Harmony: MIDI drives tonality; FFT energy keeps visuals alive on audio-only tracks
-    const fftEnergy = (bands.bass + bands.mid + bands.high) / 3;
-    const harm = harmony.update(fftEnergy);
+
+    // Harmony: MIDI drives tonality when active; audio chromagram as fallback
+    const fftEnergy    = (bands.bass + bands.mid + bands.high) / 3;
+    const midiSilentMs = performance.now() - lastMidiMs;
+    const harm = (lastMidiMs > 0 && midiSilentMs < 8000)
+      ? harmony.update(fftEnergy)
+      : harmony.updateFromChroma(audio.chromagram, fftEnergy);
     params.tonality = harm.tonality;
     params.pulse    = harm.pulse;
+
+    // Push stereo waveform to oscilloscope preset if active
+    if (currentMode === 'oscilloscope' && renderer.preset && audio.waveformL) {
+      renderer.preset.pushFrame(audio.waveformL, audio.waveformR);
+    }
+
     renderer.render(ts, bands, params);
     requestAnimationFrame(frame);
   }

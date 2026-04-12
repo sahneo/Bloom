@@ -134,6 +134,48 @@ export class HarmonyAnalyzer {
     };
   }
 
+  // Audio-based tonality: accepts a 12-bin chromagram instead of MIDI events.
+  // Runs the same K-S correlation; used when MIDI is silent.
+  updateFromChroma(chroma, fftEnergy = 0) {
+    const now     = performance.now();
+    const deltaMs = now - this._lastUpdateMs;
+    this._lastUpdateMs = now;
+
+    // Normalise chromagram to [0,1]
+    let histMax = 0.001;
+    for (let i = 0; i < 12; i++) histMax = Math.max(histMax, chroma[i]);
+    const histogram = new Float32Array(12);
+    for (let i = 0; i < 12; i++) histogram[i] = chroma[i] / histMax;
+
+    // K-S correlation — identical to update()
+    let bestMajor = 0, bestMinor = 0;
+    for (let root = 0; root < 12; root++) {
+      bestMajor = Math.max(bestMajor, dot(histogram, rotateTo(MAJOR_PROFILE, root)));
+      bestMinor = Math.max(bestMinor, dot(histogram, rotateTo(MINOR_PROFILE, root)));
+    }
+
+    const total      = bestMajor + bestMinor;
+    const hasContent = total > 0.1 && fftEnergy > 0.04;
+
+    if (hasContent) {
+      const raw = (bestMajor - bestMinor) / total;
+      this._targetTonality = Math.tanh(raw * 25);
+    } else if (fftEnergy < 0.02) {
+      this._targetTonality *= 0.997;   // slow decay to neutral on silence
+    }
+
+    // Smooth tonality (same speed as MIDI path)
+    const tonalitySpeed = 0.004 * deltaMs;
+    this.tonality += (this._targetTonality - this.tonality) * Math.min(tonalitySpeed, 1);
+
+    // No MIDI velocity → pulse driven purely by FFT energy floor
+    const pulseDecay   = Math.pow(0.92, deltaMs / 16.67);
+    this.pulse        *= pulseDecay;
+    const displayPulse = Math.max(this.pulse, fftEnergy * 0.35);
+
+    return { tonality: this.tonality, pulse: displayPulse, energy: fftEnergy };
+  }
+
   // Manually override tonality (manual key selector)
   setManualTonality(value) {
     this._targetTonality = Math.max(-1, Math.min(1, value));
