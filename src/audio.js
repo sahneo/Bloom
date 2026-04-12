@@ -188,11 +188,24 @@ export class AudioAnalyser {
     if (this.analyserL) {
       this.analyserL.getFloatTimeDomainData(this.waveformL);
       this.analyserR.getFloatTimeDomainData(this.waveformR);
-      // Pseudo-stereo for mono: delay R by 1/4 buffer ≈ 90° phase shift
-      let rEnergy = 0;
-      for (let i = 0; i < this.waveformR.length; i++) rEnergy += this.waveformR[i] * this.waveformR[i];
-      if (rEnergy < 0.001) {
-        const delay = this.waveformL.length >> 2;   // 512 samples ≈ 11.6ms
+
+      // Correlation check on first 256 samples (fast).
+      // System audio often outputs L=R even for "stereo" streams.
+      // If channels are highly correlated, apply a delay to create a
+      // Lissajous-style phase portrait instead of a boring diagonal.
+      let dotLR = 0, magL = 0, magR = 0;
+      for (let i = 0; i < 256; i++) {
+        dotLR += this.waveformL[i] * this.waveformR[i];
+        magL  += this.waveformL[i] * this.waveformL[i];
+        magR  += this.waveformR[i] * this.waveformR[i];
+      }
+      const corr = (magL > 1e-6 && magR > 1e-6)
+        ? dotLR / Math.sqrt(magL * magR)
+        : 1.0;
+
+      if (corr > 0.90) {
+        // Delay ≈ 128 samples ≈ 2.9ms → ~90° phase shift at ~87Hz bass
+        const delay = 128;
         for (let i = 0; i < this.waveformR.length; i++) {
           this.waveformR[i] = this.waveformL[(i + delay) % this.waveformL.length];
         }

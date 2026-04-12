@@ -15,6 +15,8 @@ export class OscilloscopePreset {
     // Ring buffer of recent waveform frames (index 0 = most recent)
     this._frames     = [];
     this._emptyFrame = new Float32Array(N_SAMPLES * 2); // zeros
+    // Auto-gain: tracks peak amplitude, slow decay so quiet passages fill the screen
+    this._scopePeak  = 0.01;
   }
 
   async init(device, format, canvas) {
@@ -71,11 +73,21 @@ export class OscilloscopePreset {
 
   // Call each frame with stereo PCM Float32Arrays (length = N_SAMPLES each).
   pushFrame(leftData, rightData) {
-    const frame = new Float32Array(N_SAMPLES * 2);
-    const n     = Math.min(leftData.length, rightData.length, N_SAMPLES);
+    const n = Math.min(leftData.length, rightData.length, N_SAMPLES);
+
+    // Auto-gain: find peak this frame, then slow-decay the tracker.
+    // Fast attack (instantly clamps loud signals), slow release (~10s to fully open).
+    let peak = 0.001;
     for (let i = 0; i < n; i++) {
-      frame[i * 2]     = leftData[i];
-      frame[i * 2 + 1] = rightData[i];
+      peak = Math.max(peak, Math.abs(leftData[i]), Math.abs(rightData[i]));
+    }
+    this._scopePeak = Math.max(this._scopePeak * 0.998, peak);
+    const gain = Math.min(0.88 / this._scopePeak, 12.0);  // target 88% of NDC range
+
+    const frame = new Float32Array(N_SAMPLES * 2);
+    for (let i = 0; i < n; i++) {
+      frame[i * 2]     = leftData[i]  * gain;
+      frame[i * 2 + 1] = rightData[i] * gain;
     }
 
     // Prepend new frame; keep only N_FRAMES
