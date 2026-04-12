@@ -141,11 +141,15 @@ export class HarmonyAnalyzer {
     const deltaMs = now - this._lastUpdateMs;
     this._lastUpdateMs = now;
 
-    // Normalise chromagram to [0,1]
+    // Normalise chromagram to [0,1] then apply gamma to suppress noise floor
+    // and emphasise actual pitch class peaks (audio chroma is noisier than MIDI).
     let histMax = 0.001;
     for (let i = 0; i < 12; i++) histMax = Math.max(histMax, chroma[i]);
     const histogram = new Float32Array(12);
-    for (let i = 0; i < 12; i++) histogram[i] = chroma[i] / histMax;
+    for (let i = 0; i < 12; i++) {
+      const norm = chroma[i] / histMax;
+      histogram[i] = norm * norm * norm;   // γ=3: strongly suppresses near-uniform noise
+    }
 
     // K-S correlation — identical to update()
     let bestMajor = 0, bestMinor = 0;
@@ -155,11 +159,12 @@ export class HarmonyAnalyzer {
     }
 
     const total      = bestMajor + bestMinor;
-    const hasContent = total > 0.1 && fftEnergy > 0.04;
+    const hasContent = total > 0.05 && fftEnergy > 0.04;
 
     if (hasContent) {
       const raw = (bestMajor - bestMinor) / total;
-      this._targetTonality = Math.tanh(raw * 25);
+      // Stronger amplification than MIDI path (audio signal is inherently weaker)
+      this._targetTonality = Math.tanh(raw * 40);
     } else if (fftEnergy < 0.02) {
       this._targetTonality *= 0.997;   // slow decay to neutral on silence
     }
