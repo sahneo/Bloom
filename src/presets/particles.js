@@ -109,7 +109,8 @@ export class ParticlesPreset {
       params.modeAtmos ?? 0,
       params.modePads   ?? 0,
       params.colorMode  ?? 0,  // color_mode
-      0, 0,                    // _p2 _p3 padding
+      params.tonality   ?? 0,  // tonality: -1 minor → +1 major
+      params.pulse      ?? 0,  // pulse: MIDI note-attack flash
     ]);
     this.device.queue.writeBuffer(this.uniformBuffer, 0, u);
   }

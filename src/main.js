@@ -1,5 +1,7 @@
 import { Renderer }        from './renderer.js';
 import { AudioAnalyser }   from './audio.js';
+import { MIDIHandler }     from './midi.js';
+import { HarmonyAnalyzer } from './harmony.js';
 import { ParticlesPreset } from './presets/particles.js';
 
 const canvas      = document.getElementById('canvas');
@@ -14,6 +16,8 @@ const btnTune     = document.getElementById('btn-tune');
 const tunePanel   = document.getElementById('tune');
 const btnTrain    = document.getElementById('btn-train');
 const trainPanel  = document.getElementById('train');
+const btnMidi     = document.getElementById('btn-midi');
+const statusMidi  = document.getElementById('status-midi');
 
 function resize() {
   const dpr = Math.min(devicePixelRatio, 1.5);
@@ -109,6 +113,8 @@ const params = {
   mulSb: 1, mulBass: 3, mulMid: 1, mulHigh: 1, spring: 0.3,
   modeDrums: 0, modeBass: 0, modeLead: 0, modeAtmos: 0, modePads: 0,
   colorMode: 0,
+  tonality: 0,   // -1 minor → +1 major (from HarmonyAnalyzer)
+  pulse: 0,      // 0→1 note-attack flash (from HarmonyAnalyzer)
 };
 
 function bindSlider(id, valId, key) {
@@ -215,9 +221,14 @@ window.addEventListener('keydown', e => {
   }
 });
 
-// ── Audio ────────────────────────────────────────────────────────────
+// ── Audio + MIDI + Harmony ───────────────────────────────────────────
 const renderer = new Renderer(canvas);
 const audio    = new AudioAnalyser();
+const harmony  = new HarmonyAnalyzer({ bufferMs: 3000 });
+const midi     = new MIDIHandler({
+  onNoteOn:  (pitch, velocity) => harmony.noteOn(pitch, velocity),
+  onNoteOff: (pitch)           => harmony.noteOff(pitch),
+});
 
 function onConnected(label) {
   statusAudio.textContent = `Audio: ${label}`;
@@ -234,6 +245,19 @@ async function init() {
     errorEl.textContent   = e.message;
     return;
   }
+
+  btnMidi.addEventListener('click', async () => {
+    try {
+      const inputs = await midi.connect();
+      statusMidi.textContent = `MIDI: ${inputs.length ? inputs.join(', ') : 'connected'}`;
+      statusMidi.classList.add('active');
+      btnMidi.classList.add('active');
+    } catch (e) {
+      statusMidi.textContent = 'MIDI: ' + e.message;
+      statusMidi.classList.add('error');
+      console.error('MIDI:', e);
+    }
+  });
 
   btnSystem.addEventListener('click', async () => {
     try { await audio.connectSystemAudio(); onConnected('system'); }
@@ -259,6 +283,11 @@ async function init() {
   function frame(ts) {
     const bands = applyBandMutes(audio.update());
     updateDebug(bands);
+    // Harmony: MIDI drives tonality; FFT energy keeps visuals alive on audio-only tracks
+    const fftEnergy = (bands.bass + bands.mid + bands.high) / 3;
+    const harm = harmony.update(fftEnergy);
+    params.tonality = harm.tonality;
+    params.pulse    = harm.pulse;
     renderer.render(ts, bands, params);
     requestAnimationFrame(frame);
   }

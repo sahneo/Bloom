@@ -4,7 +4,7 @@ struct Uniforms {
   frame:      f32, mul_sb:      f32, mul_bass:   f32, mul_mid:    f32,
   mul_high:   f32, spring:      f32, kick:       f32, snare:      f32,
   mode_drums: f32, mode_bass:   f32, mode_lead:  f32, mode_atmos: f32,
-  mode_pads:  f32, color_mode:  f32, _p2:        f32, _p3:        f32,
+  mode_pads:  f32, color_mode:  f32, tonality:   f32, pulse:       f32,
 }
 
 struct Particle {
@@ -104,18 +104,35 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   let alpha = in.life * edge;
   let bright = (base + core) * alpha * opacity;
 
+  // Tonality color: -1=minor(cool blues/purples), 0=neutral, +1=major(warm ambers)
+  let cool_hue    = vec3f(0.28, 0.42, 1.00);   // blue-violet for minor
+  let neutral_hue = vec3f(0.82, 0.85, 1.00);   // faint cool white for neutral
+  let warm_hue    = vec3f(1.00, 0.60, 0.08);   // amber-orange for major
+  var tone_rgb: vec3f;
+  if (u.tonality > 0.0) {
+    tone_rgb = mix(neutral_hue, warm_hue, u.tonality);
+  } else {
+    tone_rgb = mix(neutral_hue, cool_hue, -u.tonality);
+  }
+
+  // Pulse: brief brightness flash on MIDI note attacks
+  let pulse_boost = u.pulse * 0.25;
+
   // Color mode: each band gets a distinct hue for debugging
   var rgb: vec3f;
   if (u.color_mode > 0.5) {
-    if      (bi == 0u) { rgb = vec3f(1.00, 0.15, 0.10); } // drums:  red
-    else if (bi == 1u) { rgb = vec3f(0.10, 0.35, 1.00); } // bass:   blue
-    else if (bi == 2u) { rgb = vec3f(0.10, 1.00, 0.25); } // lead:   green
-    else if (bi == 3u) { rgb = vec3f(0.90, 0.10, 1.00); } // atmos:  magenta
-    else               { rgb = vec3f(1.00, 0.55, 0.05); } // pads:   orange
+    var band_rgb: vec3f;
+    if      (bi == 0u) { band_rgb = vec3f(1.00, 0.15, 0.10); } // drums:  red
+    else if (bi == 1u) { band_rgb = vec3f(0.10, 0.35, 1.00); } // bass:   blue
+    else if (bi == 2u) { band_rgb = vec3f(0.10, 1.00, 0.25); } // lead:   green
+    else if (bi == 3u) { band_rgb = vec3f(0.90, 0.10, 1.00); } // atmos:  magenta
+    else               { band_rgb = vec3f(1.00, 0.55, 0.05); } // pads:   orange
+    // In debug mode: mix band color with tonality (30% tonality tint)
+    rgb = mix(band_rgb, band_rgb * tone_rgb * 1.6, 0.30);
   } else {
-    rgb = vec3f(1.0, 1.0, 1.0);
+    rgb = tone_rgb;
   }
 
-  let c = rgb * bright;
-  return vec4f(c, bright);
+  let c = rgb * (bright + pulse_boost * alpha);
+  return vec4f(c, bright + pulse_boost * alpha);
 }

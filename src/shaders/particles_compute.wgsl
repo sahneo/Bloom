@@ -10,7 +10,7 @@ struct Uniforms {
   // row 4 — per-band visualization mode (0, 1, 2, ...)
   mode_drums: f32, mode_bass:   f32, mode_lead: f32, mode_atmos: f32,
   // row 5
-  mode_pads:  f32, _p1:         f32, _p2:       f32, _p3:      f32,
+  mode_pads:  f32, color_mode:  f32, tonality:  f32, pulse:    f32,
 }
 
 struct Particle {
