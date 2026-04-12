@@ -23,9 +23,9 @@ export class ParticlesPreset {
     const computeModule = device.createShaderModule({ label: 'particles-compute', code: computeSource });
     const renderModule  = device.createShaderModule({ label: 'particles-render',  code: renderSource  });
 
-    // Uniform buffer: 12 × f32 = 48 bytes
+    // Uniform buffer: 24 × f32 = 96 bytes
     this.uniformBuffer = device.createBuffer({
-      size: 48,
+      size: 96,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
@@ -85,7 +85,7 @@ export class ParticlesPreset {
     });
   }
 
-  _writeUniforms(bands, timeMs, deltaMs) {
+  _writeUniforms(bands, timeMs, deltaMs, params) {
     const u = new Float32Array([
       timeMs * 0.001,
       bands.subBass ?? 0,
@@ -96,14 +96,27 @@ export class ParticlesPreset {
       this.canvas.width,
       this.canvas.height,
       this.frameCount,
-      0, 0, 0,
+      params.mulSb,
+      params.mulBass,
+      params.mulMid,
+      params.mulHigh,
+      params.spring,
+      bands.kick       ?? 0,
+      bands.snare      ?? 0,
+      params.modeDrums ?? 0,
+      params.modeBass  ?? 0,
+      params.modeLead  ?? 0,
+      params.modeAtmos ?? 0,
+      params.modePads   ?? 0,
+      params.colorMode  ?? 0,  // color_mode
+      0, 0,                    // _p2 _p3 padding
     ]);
     this.device.queue.writeBuffer(this.uniformBuffer, 0, u);
   }
 
-  tick(device, bands, timeMs, deltaMs) {
+  tick(device, bands, timeMs, deltaMs, params) {
     this.frameCount++;
-    this._writeUniforms(bands, timeMs, deltaMs);
+    this._writeUniforms(bands, timeMs, deltaMs, params);
 
     const enc  = device.createCommandEncoder();
     const pass = enc.beginComputePass();

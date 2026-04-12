@@ -10,6 +10,10 @@ const btnSystem   = document.getElementById('btn-system');
 const btnMic      = document.getElementById('btn-mic');
 const btnFile     = document.getElementById('btn-file');
 const fileInput   = document.getElementById('file-input');
+const btnTune     = document.getElementById('btn-tune');
+const tunePanel   = document.getElementById('tune');
+const btnTrain    = document.getElementById('btn-train');
+const trainPanel  = document.getElementById('train');
 
 function resize() {
   const dpr = Math.min(devicePixelRatio, 1.5);
@@ -19,6 +23,199 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
+// ── Band mute / solo ────────────────────────────────────────────────
+const BANDS = ['drums', 'bass', 'lead', 'atmos', 'pads'];
+const bandState = Object.fromEntries(BANDS.map(k => [k, { enabled: true, solo: false }]));
+
+function isBandActive(k) {
+  const anySolo = BANDS.some(b => bandState[b].solo);
+  return anySolo ? bandState[k].solo : bandState[k].enabled;
+}
+
+function applyBandMutes(bands) {
+  return {
+    ...bands,
+    kick:    isBandActive('drums') ? bands.kick    : 0,
+    snare:   isBandActive('drums') ? bands.snare   : 0,
+    bass:    isBandActive('bass')  ? bands.bass    : 0,
+    mid:     isBandActive('lead')  ? bands.mid     : 0,
+    high:    isBandActive('atmos') ? bands.high    : 0,
+    subBass: isBandActive('pads')  ? bands.subBass : 0,
+  };
+}
+
+function updateBandUI() {
+  const anySolo = BANDS.some(k => bandState[k].solo);
+  BANDS.forEach(k => {
+    const row      = document.getElementById(`band-${k}`);
+    const soloBtn  = document.getElementById(`solo-${k}`);
+    soloBtn.classList.toggle('active', bandState[k].solo);
+    row.classList.toggle('muted',  !anySolo && !bandState[k].enabled);
+    row.classList.toggle('dimmed',  anySolo && !bandState[k].solo);
+  });
+}
+
+const modeParamKey = { drums: 'modeDrums', bass: 'modeBass', lead: 'modeLead', atmos: 'modeAtmos', pads: 'modePads' };
+
+BANDS.forEach(k => {
+  document.getElementById(`tog-${k}`).addEventListener('change', e => {
+    bandState[k].enabled = e.target.checked;
+    updateBandUI();
+  });
+  document.getElementById(`solo-${k}`).addEventListener('click', () => {
+    bandState[k].solo = !bandState[k].solo;
+    updateBandUI();
+  });
+  const sel = document.getElementById(`mode-${k}`);
+  if (sel) sel.addEventListener('change', () => { params[modeParamKey[k]] = parseInt(sel.value); });
+});
+
+// ── Debug overlay ───────────────────────────────────────────────────
+const debugEl  = document.getElementById('debug');
+const btnDebug = document.getElementById('btn-debug');
+const btnColor = document.getElementById('btn-color');
+
+btnDebug.addEventListener('click', () => {
+  const hidden = debugEl.classList.toggle('hidden');
+  btnDebug.classList.toggle('active', !hidden);
+});
+
+btnColor.addEventListener('click', () => {
+  params.colorMode = params.colorMode > 0.5 ? 0 : 1;
+  btnColor.classList.toggle('active', params.colorMode > 0.5);
+});
+
+const DB_BANDS = [
+  { key: 'kick',    label: 'KICK',  color: '#ff4444' },
+  { key: 'snare',   label: 'SNARE', color: '#ff9944' },
+  { key: 'bass',    label: 'BASS',  color: '#4488ff' },
+  { key: 'mid',     label: 'MID',   color: '#44ff88' },
+  { key: 'high',    label: 'HIGH',  color: '#cc44ff' },
+  { key: 'subBass', label: 'SUB',   color: '#ffdd44' },
+];
+
+function updateDebug(bands) {
+  if (debugEl.classList.contains('hidden')) return;
+  DB_BANDS.forEach(({ key, color }) => {
+    const val = bands[key] ?? 0;
+    document.getElementById(`db-bar-${key}`).style.width = (val * 100).toFixed(1) + '%';
+    document.getElementById(`db-bar-${key}`).style.background = color;
+    document.getElementById(`db-val-${key}`).textContent = val.toFixed(2);
+  });
+}
+
+// ── Tunable params (linked to sliders) ──────────────────────────────
+const params = {
+  mulSb: 1, mulBass: 3, mulMid: 1, mulHigh: 1, spring: 0.3,
+  modeDrums: 0, modeBass: 0, modeLead: 0, modeAtmos: 0, modePads: 0,
+  colorMode: 0,
+};
+
+function bindSlider(id, valId, key) {
+  const sl = document.getElementById(id);
+  const vl = document.getElementById(valId);
+  sl.addEventListener('input', () => {
+    params[key] = parseFloat(sl.value);
+    vl.textContent = parseFloat(sl.value).toFixed(2);
+  });
+}
+bindSlider('sl-sb',     'v-sb',     'mulSb');
+bindSlider('sl-bass',   'v-bass',   'mulBass');
+bindSlider('sl-mid',    'v-mid',    'mulMid');
+bindSlider('sl-high',   'v-high',   'mulHigh');
+bindSlider('sl-spring', 'v-spring', 'spring');
+
+btnTune.addEventListener('click', () => {
+  const hidden = tunePanel.classList.toggle('hidden');
+  btnTune.classList.toggle('active', !hidden);
+  // When panel is open, keep it in bottom-right; move button up
+  btnTune.style.bottom = hidden ? '20px' : (tunePanel.offsetHeight + 32) + 'px';
+});
+
+// ── Template training ────────────────────────────────────────────────
+const TRAIN_BANDS = ['kick', 'snare', 'bass', 'lead', 'atmos', 'pads'];
+let trainTarget = null;   // which band button is selected
+
+function updateTrainUI() {
+  TRAIN_BANDS.forEach(k => {
+    const btn = document.getElementById(`train-band-${k}`);
+    btn.classList.toggle('active', trainTarget === k);
+    btn.classList.toggle('has-tmpl', audio.hasTemplate(k));
+  });
+  const tapBtn    = document.getElementById('train-tap');
+  const saveBtn   = document.getElementById('train-save');
+  const clearBtn  = document.getElementById('train-clear');
+  const countEl   = document.getElementById('train-count');
+  const statusEl  = document.getElementById('train-status');
+
+  const active = trainTarget !== null;
+  tapBtn.disabled   = !active;
+  saveBtn.disabled  = !active || audio.tapCount() === 0;
+  clearBtn.disabled = !active || !audio.hasTemplate(trainTarget);
+
+  if (!active) {
+    statusEl.textContent = 'Select a band to train';
+    countEl.textContent  = '';
+  } else {
+    const n = audio.tapCount();
+    countEl.textContent  = n > 0 ? `${n} tap${n > 1 ? 's' : ''}` : '';
+    if (audio.hasTemplate(trainTarget) && n === 0) {
+      statusEl.textContent = 'Template saved — tap to retrain';
+    } else if (n === 0) {
+      statusEl.textContent = 'Tap in rhythm with the instrument';
+    } else {
+      statusEl.textContent = `${n >= 4 ? 'Ready to save' : 'Keep tapping'} (min 4 taps)`;
+      saveBtn.disabled = n < 4;
+    }
+  }
+}
+
+btnTrain.addEventListener('click', () => {
+  const hidden = trainPanel.classList.toggle('hidden');
+  btnTrain.classList.toggle('active', !hidden);
+  if (hidden) { trainTarget = null; audio.startTap(null); }
+  updateTrainUI();
+});
+
+TRAIN_BANDS.forEach(k => {
+  document.getElementById(`train-band-${k}`).addEventListener('click', () => {
+    trainTarget = (trainTarget === k) ? null : k;
+    audio.startTap(trainTarget);   // resets tap buffer for new target
+    updateTrainUI();
+  });
+});
+
+document.getElementById('train-tap').addEventListener('click', () => {
+  if (!trainTarget) return;
+  audio.recordTap();
+  updateTrainUI();
+});
+
+document.getElementById('train-save').addEventListener('click', () => {
+  if (audio.commitTemplate()) updateTrainUI();
+});
+
+document.getElementById('train-clear').addEventListener('click', () => {
+  if (!trainTarget) return;
+  audio.clearTemplate(trainTarget);
+  audio.startTap(trainTarget);
+  updateTrainUI();
+});
+
+// Space = tap shortcut when training panel is open
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space' && trainTarget && !trainPanel.classList.contains('hidden')) {
+    e.preventDefault();
+    audio.recordTap();
+    // Flash the TAP button
+    const tapBtn = document.getElementById('train-tap');
+    tapBtn.classList.add('flash');
+    setTimeout(() => tapBtn.classList.remove('flash'), 100);
+    updateTrainUI();
+  }
+});
+
+// ── Audio ────────────────────────────────────────────────────────────
 const renderer = new Renderer(canvas);
 const audio    = new AudioAnalyser();
 
@@ -57,8 +254,12 @@ async function init() {
     catch (e) { console.error('File:', e); }
   });
 
+  updateTrainUI();
+
   function frame(ts) {
-    renderer.render(ts, audio.update());
+    const bands = applyBandMutes(audio.update());
+    updateDebug(bands);
+    renderer.render(ts, bands, params);
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

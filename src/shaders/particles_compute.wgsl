@@ -1,23 +1,25 @@
 struct Uniforms {
-  time:     f32,
-  sub_bass: f32,
-  bass:     f32,
-  mid:      f32,
-  high:     f32,
-  delta:    f32,
-  res_x:    f32,
-  res_y:    f32,
-  frame:    f32,
-  _p0: f32, _p1: f32, _p2: f32,
+  // row 0
+  time:       f32, sub_bass:    f32, bass:      f32, mid:       f32,
+  // row 1
+  high:       f32, delta:       f32, res_x:     f32, res_y:    f32,
+  // row 2
+  frame:      f32, mul_sb:      f32, mul_bass:  f32, mul_mid:  f32,
+  // row 3
+  mul_high:   f32, spring:      f32, kick:      f32, snare:    f32,
+  // row 4 — per-band visualization mode (0, 1, 2, ...)
+  mode_drums: f32, mode_bass:   f32, mode_lead: f32, mode_atmos: f32,
+  // row 5
+  mode_pads:  f32, _p1:         f32, _p2:       f32, _p3:      f32,
 }
 
 struct Particle {
-  pos:  vec2f,
-  vel:  vec2f,
-  life: f32,
+  pos:      vec2f,
+  vel:      vec2f,
+  life:     f32,
   max_life: f32,
-  size: f32,
-  _pad: f32,
+  size:     f32,
+  band:     f32,
 }
 
 @group(0) @binding(0) var<uniform>             u: Uniforms;
@@ -33,104 +35,296 @@ fn rnd(seed: u32) -> f32 { return f32(pcg(seed)) / 4294967295.0; }
 fn respawn(idx: u32, seed: u32) -> Particle {
   var p: Particle;
   let asp  = u.res_x / u.res_y;
-  // Scatter uniformly across the entire screen
-  p.pos      = vec2f((rnd(seed)      * 2.0 - 1.0) * asp,
-                      rnd(seed + 1u) * 2.0 - 1.0);
-  p.vel      = vec2f(0.0);
-  p.life     = 1.0;
-  p.max_life = 50.0 + rnd(seed + 2u) * 50.0;  // 50-100 seconds
-  p.size     = 0.003 + rnd(seed + 3u) * 0.004;
+  p.pos    = vec2f((rnd(seed) * 2.0 - 1.0) * asp, rnd(seed + 1u) * 2.0 - 1.0);
+  p.vel    = vec2f(0.0);
+  p.life   = 1.0;
+  p.band   = f32(idx % 5u);
+  let bi   = idx % 5u;
+  if      (bi == 0u) { p.max_life = 40.0 + rnd(seed+2u)*30.0; p.size = 0.008+rnd(seed+3u)*0.007; }
+  else if (bi == 1u) { p.max_life = 70.0 + rnd(seed+2u)*50.0; p.size = 0.004+rnd(seed+3u)*0.005; }
+  else if (bi == 2u) { p.max_life = 50.0 + rnd(seed+2u)*40.0; p.size = 0.003+rnd(seed+3u)*0.004; }
+  else if (bi == 3u) { p.max_life = 18.0 + rnd(seed+2u)*20.0; p.size = 0.001+rnd(seed+3u)*0.002; }
+  else               { p.max_life = 120.0+ rnd(seed+2u)*80.0; p.size = 0.010+rnd(seed+3u)*0.010; }
   return p;
 }
 
-// Vortex force: swirls particles around center c
-fn vortex(pos: vec2f, c: vec2f, strength: f32) -> vec2f {
-  let d     = pos - c;
-  let dist2 = dot(d, d);
-  let perp  = vec2f(-d.y, d.x);
-  return perp * strength / (dist2 + 0.08);
+fn curl_field(pos: vec2f, t: f32) -> vec2f {
+  let a = 1.7; let b = 0.22; let c = 2.1; let d = 0.28;
+  let e = 2.4; let g = 0.17; let h = 1.5; let k = 0.21;
+  let u1 = -c * sin(a * pos.x + b * t) * sin(c * pos.y + d * t);
+  let v1 = -a * cos(a * pos.x + b * t) * cos(c * pos.y + d * t);
+  let u2 =  h * cos(e * pos.x + g * t) * cos(h * pos.y + k * t);
+  let v2 =  e * sin(e * pos.x + g * t) * sin(h * pos.y + k * t);
+  return vec2f(u1 + u2, v1 + v2);
 }
 
 @compute @workgroup_size(64)
 fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
-  let idx = gid.x;
+  let idx  = gid.x;
   if (idx >= arrayLength(&particles)) { return; }
 
   var p    = particles[idx];
   let seed = pcg(idx + u32(u.frame) * 83721u);
   let asp  = u.res_x / u.res_y;
+  let band = u32(p.band + 0.5);
 
-  // Rarely respawn: only when dead or very near end of life
-  let spawn_prob = 0.001 + (u.sub_bass + u.bass) * 0.004;
+  let mode_drums = u32(u.mode_drums + 0.5);
+  let mode_bass  = u32(u.mode_bass  + 0.5);
+  let mode_lead  = u32(u.mode_lead  + 0.5);
+  let mode_atmos = u32(u.mode_atmos + 0.5);
+  let mode_pads  = u32(u.mode_pads  + 0.5);
+
+  let spawn_prob = 0.001;
   if (p.life <= 0.0 || (p.life < 0.015 && rnd(seed) < spawn_prob)) {
     particles[idx] = respawn(idx, seed);
     return;
   }
 
   let dt = clamp(u.delta, 0.0, 0.04);
+  let t  = u.time;
   var f  = vec2f(0.0);
 
-  // --- SUB-BASS: global tremble + slow drift ---
-  // Each particle has a unique tremble direction that updates slowly
-  let tseed = pcg(idx ^ u32(u.time * 4.0));
-  let tdir  = normalize(vec2f(f32(tseed & 0xffffu) / 32767.5 - 1.0,
-                               f32(tseed >> 16u)    / 32767.5 - 1.0) + vec2f(0.0001));
-  f += tdir * u.sub_bass * 5.0;
+  // Weak spring toward center — keeps all particles on screen
+  f -= p.pos * u.spring;
 
-  // Shared slow directional drift (direction rotates very slowly)
-  let drift_ang = u.time * 0.07;
-  f += vec2f(cos(drift_ang), sin(drift_ang)) * u.sub_bass * 1.8;
+  // ── BAND 0: DRUMS ───────────────────────────────────────────────────
+  if (band == 0u) {
+    if (mode_drums == 0u) {
+      // BURST: kick = concentrated radial push near centre; Gaussian keeps force ~0 at edges
+      let dc = length(p.pos);
+      let falloff = exp(-dc * dc * 5.0); // ≈1 at centre, ≈0.01 at dc=0.7 → no edge pile-up
+      f += normalize(p.pos + vec2f(0.0001)) * u.kick  * u.mul_sb * 8.0 * falloff;
+      let sdir = normalize(vec2f(rnd(seed^0xA3C5u)*2.0-1.0, rnd(seed^0x5F2Bu)*2.0-1.0) + vec2f(0.0001));
+      f += sdir * u.snare * u.mul_sb * 6.0 * falloff;
+      // Extra centripetal on top of global spring — snaps drums back to centre
+      f -= p.pos * 0.30;
 
-  // --- MID: moving vortices — direction slowly reverses per vortex ---
-  let t   = u.time;
-  // sin() oscillates -1..+1 at different rates → each vortex flips independently
-  let d1  = sin(t * 0.07);
-  let d2  = sin(t * 0.05 + 2.09);
-  let d3  = sin(t * 0.09 + 4.18);
-  let v1  = vec2f(sin(t * 0.21) * 0.7 * asp, cos(t * 0.17) * 0.55);
-  let v2  = vec2f(cos(t * 0.18 + 2.09) * 0.65 * asp, sin(t * 0.23) * 0.6);
-  let v3  = vec2f(sin(t * 0.14 + 4.18) * 0.8 * asp, cos(t * 0.19 + 1.0) * 0.5);
-  f += vortex(p.pos, v1, u.mid * 0.55) * d1;
-  f += vortex(p.pos, v2, u.mid * 0.45) * d2;
-  f += vortex(p.pos, v3, u.mid * 0.50) * d3;
+    } else if (mode_drums == 1u) {
+      // SHOCKWAVE: expanding ring tied to kick decay; particles get pushed as ring passes
+      // When kick=1 (just hit) wave_r=0 (at center). As kick decays wave expands outward.
+      let wave_r = (1.0 - u.kick) * 2.8;
+      let pdist  = length(p.pos);
+      let wave_w = 0.22;
+      let ring_d = abs(pdist - wave_r);
+      let wave_push = exp(-ring_d * ring_d / (wave_w * wave_w));
+      f += normalize(p.pos + vec2f(0.0001)) * u.kick * u.mul_sb * wave_push * 28.0;
+      // Snare: inward slam then release
+      f -= normalize(p.pos + vec2f(0.0001)) * u.snare * u.mul_sb * 10.0;
 
-  // --- HIGH: wide radial bursts — wide enough to form visible waves ---
-  let h1_ang    = t * 0.73;
-  let h1_center = vec2f(cos(h1_ang) * 0.35 * asp, sin(h1_ang * 0.8) * 0.3);
-  let h1_d      = p.pos - h1_center;
-  let h1_dist   = length(h1_d);
-  f += normalize(h1_d + vec2f(0.0001)) * u.high * 14.0 * exp(-h1_dist * h1_dist * 0.7);
+    } else {
+      // SLAM: kick pulls everything toward center (implosion), snare spins tangentially
+      f -= normalize(p.pos + vec2f(0.0001)) * u.kick * u.mul_sb * 18.0;
+      let ptang = vec2f(-p.pos.y, p.pos.x) / (length(p.pos) + 0.001);
+      let spin_dir = select(-1.0, 1.0, (idx % 2u) == 0u);
+      f += ptang * spin_dir * u.snare * u.mul_sb * 12.0;
+    }
+    // Base ambient so drums don't freeze between hits
+    let da = t * 0.09 + f32(idx) * 0.001;
+    f += vec2f(cos(da), sin(da)) * 0.04;
+  }
 
-  let h2_ang    = t * 0.61 + 2.09;
-  let h2_center = vec2f(sin(h2_ang) * 0.45 * asp, cos(h2_ang * 0.9) * 0.35);
-  let h2_d      = p.pos - h2_center;
-  let h2_dist   = length(h2_d);
-  f += normalize(h2_d + vec2f(0.0001)) * u.high * 10.0 * exp(-h2_dist * h2_dist * 0.9);
+  // ── BAND 1: BASS ────────────────────────────────────────────────────
+  else if (band == 1u) {
+    if (mode_bass == 0u) {
+      // RIPPLE: radial standing wave — bass drives amplitude instantly, no travel delay.
+      // sin(r*k - wt) is a spatial wave pattern already present everywhere;
+      // bass turns up the volume on it so all particles react simultaneously.
+      let pdist2 = length(p.pos);
+      let wave   = sin(pdist2 * 6.5 - t * 3.8);
+      f += normalize(p.pos + vec2f(0.0001)) * u.bass * u.mul_bass * wave * 11.0;
+      // Very slow ambient drift so particles don't freeze when silent
+      let da_r = t * 0.07 + 1.5;
+      f += vec2f(cos(da_r), sin(da_r)) * 0.028;
 
-  // --- BASS PULSE: radial burst from center on beat ---
-  let dist_c = length(p.pos);
-  f += normalize(p.pos + vec2f(0.0001)) * u.bass * 10.0 * exp(-dist_c * dist_c * 0.6);
+    } else if (mode_bass == 1u) {
+      // WELLS: 3 orbiting wells with harmonic restoring force around r0.
+      // Repels particles that get too close, attracts from afar → stable orbits, no collapse.
+      for (var i = 0u; i < 3u; i++) {
+        let angle    = t * 0.20 + f32(i) * 2.094;
+        let well_pos = vec2f(cos(angle) * 0.38, sin(angle) * 0.38);
+        let to_well  = well_pos - p.pos;
+        let dist     = max(length(to_well), 0.001);
+        let r0       = 0.11;
+        let bass_mod = 0.4 + u.bass * u.mul_bass * 0.7;
+        // Spring around r0: positive=attract, negative=repel (keeps particles orbiting, not collapsing)
+        let spring_f = (dist - r0) * bass_mod * 7.0;
+        f += normalize(to_well) * spring_f;
+        // Tangential: orbit the well (alternating CW/CCW per particle)
+        let orb_dir = select(-1.0, 1.0, (idx % 2u) == 0u);
+        let tang_w  = vec2f(-to_well.y, to_well.x) * orb_dir / dist;
+        f += tang_w * bass_mod * 1.0;
+      }
 
-  // --- AMBIENT DRIFT: barely visible slow motion when audio is silent ---
-  let energy  = clamp(u.sub_bass + u.bass + u.mid + u.high, 0.0, 1.0);
-  let silence = 1.0 - energy;
-  let aseed   = pcg(idx ^ u32(u.time * 0.4));  // direction changes every ~2.5s
-  let adir    = normalize(vec2f(f32(aseed & 0xffffu) / 32767.5 - 1.0,
-                                 f32(aseed >> 16u)    / 32767.5 - 1.0) + vec2f(0.0001));
-  f += adir * silence * 0.12;
+    } else if (mode_bass == 2u) {
+      // SWELL: sinusoidal flow field. No min-floor: silent = nearly still, bass = big sweeps.
+      let bass_str = u.bass * u.mul_bass;
+      let wx = cos(p.pos.y * 1.3 + t * 0.18) * bass_str * 5.5;
+      let wy = sin(p.pos.x * 1.1 + t * 0.14) * bass_str * 4.5;
+      f += vec2f(wx, wy);
+      // Bare minimum drift so particles don't freeze completely
+      let da_sw = t * 0.05 + f32(idx % 7u) * 0.9;
+      f += vec2f(cos(da_sw), sin(da_sw)) * 0.018;
 
-  // Low drag — particles hold momentum between beats
-  p.vel *= exp(-1.8 * dt);
+    } else {
+      // RING: speaker-cone membrane. Ring radius = 0 when silent, expands on bass hit.
+      // Whole field collapses to center between beats and explodes outward on the beat.
+      let bass_str  = u.bass * u.mul_bass;
+      let pdist_r   = length(p.pos);
+      let ring_r    = 0.12 + bass_str * 0.30;
+      let pull_str  = 4.5 + bass_str * 4.0;
+      let ring_pull = (ring_r - pdist_r) * pull_str;
+      f += normalize(p.pos + vec2f(0.0001)) * ring_pull;
+      // Orbit speed is 0 when silent, grows with bass
+      let orb_dir = select(-1.0, 1.0, (idx % 2u) == 0u);
+      let tangent = vec2f(-p.pos.y, p.pos.x) * orb_dir / (pdist_r + 0.001);
+      f += tangent * bass_str * 2.0;
+    }
+  }
 
+  // ── BAND 2: LEAD SYNTH ──────────────────────────────────────────────
+  else if (band == 2u) {
+    let mid_str = max(u.mid, 0.05) * u.mul_mid;
+
+    if (mode_lead == 0u) {
+      // CURL: divergence-free curl field — persistent vortices
+      let cf = curl_field(p.pos * 0.75, t * 0.28);
+      f += cf * mid_str * 6.0;
+      // Cross-reaction to kick — lead flares on the beat
+      f += normalize(p.pos + vec2f(0.0001)) * u.kick * u.mul_mid * 8.0 * exp(-length(p.pos) * 0.8);
+      f -= p.pos * 0.06;
+
+    } else if (mode_lead == 1u) {
+      // VORTEX: one powerful vortex whose center drifts slowly around screen
+      let vcx = sin(t * 0.13) * 0.28 + cos(t * 0.07) * 0.15;
+      let vcy = cos(t * 0.17) * 0.22 + sin(t * 0.11) * 0.10;
+      let vc       = vec2f(vcx, vcy);
+      let from_vc  = p.pos - vc;
+      let vdist    = length(from_vc) + 0.001;
+      // Tangential spin
+      let vtan = vec2f(-from_vc.y, from_vc.x) / vdist;
+      f += vtan * mid_str * 6.0 / (vdist + 0.25);
+      // Mild pull toward vortex center
+      f += normalize(vc - p.pos) * mid_str * 2.0;
+      // Kick moves the vortex center abruptly — particles feel centrifugal burst
+      f += normalize(p.pos - vc) * u.kick * u.mul_mid * 10.0 * exp(-vdist * 2.0);
+
+    } else {
+      // PINBALL: 3 repellers orbit; mid freq energizes them; chaotic trajectories
+      for (var i = 0u; i < 3u; i++) {
+        let angle  = t * (0.14 + f32(i) * 0.06) + f32(i) * 2.094;
+        let rep    = vec2f(cos(angle) * 0.32, sin(angle) * 0.32);
+        let from_r = p.pos - rep;
+        let rdist  = max(length(from_r), 0.04);
+        f += normalize(from_r) * mid_str * 4.0 / (rdist * rdist);
+      }
+      f -= p.pos * 0.05; // mild centripetal to keep inside screen
+    }
+  }
+
+  // ── BAND 3: ATMOSPHERE ──────────────────────────────────────────────
+  else if (band == 3u) {
+    let high_str = u.high * u.mul_high;
+
+    if (mode_atmos == 0u) {
+      // SPARKS: irregular burst points — high freq triggers local explosions
+      for (var i = 0u; i < 3u; i++) {
+        let rate  = 4.0 + f32(i) * 2.0;
+        let tick  = u32(t * rate);
+        let bseed = pcg(tick * 10007u + i * 997u + idx % 8u);
+        let bc    = vec2f((f32(bseed & 0xffffu) / 32767.5 - 1.0) * asp * 0.70,
+                           f32(bseed >> 16u)    / 32767.5 - 1.0) * 0.70;
+        let phase = fract(t * rate);
+        let pulse = exp(-phase * 12.0);
+        let bd    = p.pos - bc;
+        let bdist = length(bd) + 0.001;
+        f += normalize(bd) * high_str * 12.0 * pulse / (bdist + 0.18);
+      }
+      // Snare cross-reaction
+      let sdir2 = normalize(vec2f(rnd(seed^0x9E37u)*2.0-1.0, rnd(seed^0x3B7Fu)*2.0-1.0) + vec2f(0.0001));
+      f += sdir2 * u.snare * u.mul_high * 10.0;
+
+    } else if (mode_atmos == 1u) {
+      // RAIN: gravity downward; high freq = heavier rain
+      let gravity = 1.2 + high_str * 2.5;
+      f += vec2f(sin(t * 0.4 + p.pos.y * 1.5) * high_str * 0.4, -gravity);
+
+    } else {
+      // STARS: near-stationary brownian motion; high freq = brief twinkle burst
+      let bseed2 = pcg(idx ^ u32(t * 6.0));
+      let bdir   = normalize(vec2f(f32(bseed2 & 0xffffu)/32767.5-1.0,
+                                    f32(bseed2 >> 16u)   /32767.5-1.0) + vec2f(0.0001));
+      f += bdir * (0.015 + high_str * 0.4);
+    }
+    // Base drift when silent
+    let da4 = t * 0.17 + f32(idx) * 0.002;
+    f += vec2f(cos(da4), sin(da4)) * 0.02;
+  }
+
+  // ── BAND 4: PADS ────────────────────────────────────────────────────
+  else {
+    let sb_str = max(u.sub_bass, 0.02) * u.mul_sb;
+
+    if (mode_pads == 0u) {
+      // ROTATE: slow rotation, sub_bass controls speed and gentle expansion
+      let angle    = atan2(p.pos.y, p.pos.x);
+      let orbit_d  = select(-1.0, 1.0, sin(t * 0.05) > 0.0); // slowly reverses
+      let tangent  = vec2f(-sin(angle), cos(angle)) * orbit_d;
+      f += tangent * sb_str * 1.8;
+      f += normalize(p.pos + vec2f(0.0001)) * u.sub_bass * u.mul_sb * 1.5;
+
+    } else if (mode_pads == 1u) {
+      // BREATHE: radial in/out timed to a slow cycle driven by sub_bass
+      let breathe   = sin(t * 0.22 + f32(idx % 13u) * 0.48) * 0.5 + 0.5;
+      let target_r  = 0.12 + breathe * 0.55;
+      let pdist_pb  = length(p.pos);
+      let radial    = (target_r - pdist_pb) * 2.0;
+      f += normalize(p.pos + vec2f(0.0001)) * radial;
+      f += normalize(p.pos + vec2f(0.0001)) * sb_str * 2.5;
+
+    } else {
+      // FOG: barely-there brownian drift; almost stationary cloud
+      let fseed = pcg(idx ^ u32(t * 0.9));
+      let fdir  = normalize(vec2f(f32(fseed & 0xffffu)/32767.5-1.0,
+                                   f32(fseed >> 16u)   /32767.5-1.0) + vec2f(0.0001));
+      f += fdir * (0.006 + sb_str * 0.12);
+    }
+    // Base slow drift for all pad modes
+    let da5 = t * 0.04 + f32(idx) * 0.0005;
+    f += vec2f(cos(da5), sin(da5)) * 0.016;
+  }
+
+  // Ambient drift when fully silent — all bands stay alive
+  let energy  = clamp(u.sub_bass + u.bass + u.mid + u.high + u.kick + u.snare, 0.0, 1.0);
+  let silence = max(0.0, 1.0 - energy * 3.0);
+  let aseed   = pcg(idx ^ u32(t * 0.35));
+  let adir    = normalize(vec2f(f32(aseed & 0xffffu)/32767.5-1.0,
+                                 f32(aseed >> 16u)   /32767.5-1.0) + vec2f(0.0001));
+  f += adir * silence * 0.06;
+
+  // Per-band drag
+  var drag = 4.5;
+  if      (band == 0u) { drag = 6.0; }   // drums: high drag so burst snaps back fast
+  else if (band == 1u) { drag = 2.8; }
+  else if (band == 2u) { drag = 2.5; }
+  else if (band == 3u) {
+    // Rain mode: lower drag so they actually fall
+    drag = select(9.0, 3.5, mode_atmos == 1u);
+  }
+  else {
+    // Pads: high drag (slow drift), fog even higher
+    drag = select(7.0, 10.0, mode_pads == 2u);
+  }
+
+  p.vel *= exp(-drag * dt);
   p.vel  += f * dt;
   p.pos  += p.vel * dt;
   p.life -= dt / p.max_life;
 
-  // Wrap around edges
+  // Wrap at screen edges (rain wraps bottom→top naturally)
   if (p.pos.x >  asp + 0.05) { p.pos.x -= 2.0 * asp + 0.1; }
   if (p.pos.x < -asp - 0.05) { p.pos.x += 2.0 * asp + 0.1; }
-  if (p.pos.y >  1.05)       { p.pos.y -= 2.1; }
-  if (p.pos.y < -1.05)       { p.pos.y += 2.1; }
+  if (p.pos.y >  1.05)        { p.pos.y -= 2.1; }
+  if (p.pos.y < -1.05)        { p.pos.y += 2.1; }
 
   particles[idx] = p;
 }

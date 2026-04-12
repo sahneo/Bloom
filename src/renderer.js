@@ -32,11 +32,11 @@ export class Renderer {
     await this.preset.init(this.device, this.format, this.canvas);
   }
 
-  render(timeMs, bands) {
+  render(timeMs, bands, params) {
     const delta  = this._lastTs === null ? 16.67 : timeMs - this._lastTs;
     this._lastTs = timeMs;
     if (!this.preset) return;
-    this.preset.tick(this.device, bands, timeMs, delta);
+    this.preset.tick(this.device, bands, timeMs, delta, params);
     this.preset.draw(this.device, this.context.getCurrentTexture().createView());
   }
 }
