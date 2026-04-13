@@ -100,7 +100,7 @@ const DB_BANDS = [
   { key: 'subBass', label: 'SUB',   color: '#ffdd44' },
 ];
 
-function updateDebug(bands) {
+function updateDebug(bands, harm) {
   if (debugEl.classList.contains('hidden')) return;
   DB_BANDS.forEach(({ key, color }) => {
     const val = bands[key] ?? 0;
@@ -108,6 +108,19 @@ function updateDebug(bands) {
     document.getElementById(`db-bar-${key}`).style.background = color;
     document.getElementById(`db-val-${key}`).textContent = val.toFixed(2);
   });
+  // Tonality: -1 (minor/cool) → 0 (neutral) → +1 (major/warm)
+  // Show as a needle at 50% + offset
+  if (harm) {
+    const t = harm.tonality;
+    const pct = (t * 50).toFixed(1);  // ±50% from center
+    const bar = document.getElementById('db-bar-tonal');
+    const color = t > 0 ? `#ff8c00` : `#4488ff`;
+    bar.style.left = t >= 0 ? '50%' : (50 + parseFloat(pct)) + '%';
+    bar.style.width = Math.abs(parseFloat(pct)) + '%';
+    bar.style.background = color;
+    document.getElementById('db-val-tonal').textContent = t.toFixed(2);
+    document.getElementById('db-val-tonal').style.color = color;
+  }
 }
 
 // ── Tunable params (linked to sliders) ──────────────────────────────
@@ -301,7 +314,6 @@ async function init() {
 
   function frame(ts) {
     const bands = applyBandMutes(audio.update());
-    updateDebug(bands);
 
     // Harmony: MIDI drives tonality when active; audio chromagram as fallback
     const fftEnergy    = (bands.bass + bands.mid + bands.high) / 3;
@@ -311,6 +323,8 @@ async function init() {
       : harmony.updateFromChroma(audio.chromagram, fftEnergy);
     params.tonality = harm.tonality;
     params.pulse    = harm.pulse;
+
+    updateDebug(bands, harm);
 
     // Push stereo waveform to oscilloscope preset if active
     if (currentMode === 'oscilloscope' && renderer.preset && audio.waveformL) {

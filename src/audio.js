@@ -20,7 +20,11 @@ export class AudioAnalyser {
     this._tapSamples = [];   // snapshots accumulated during tap training
     this._tapTarget  = null; // band name being trained right now
     // Chromagram (12-bin pitch class energy, computed every frame from FFT)
-    this.chromagram  = new Float32Array(12);
+    this.chromagram   = new Float32Array(12);
+    // High-resolution analyser for chromagram (8192-pt FFT → ~5.4 Hz/bin at 44100 Hz)
+    // Separate from the main analyser so band detection is unaffected.
+    this.chromaAnalyser = null;
+    this.chromaData     = null;
     // Stereo waveform for oscilloscope (time-domain PCM, L and R channels)
     this.analyserL   = null;
     this.analyserR   = null;
@@ -44,10 +48,12 @@ export class AudioAnalyser {
     const buf = await this.context.decodeAudioData(await file.arrayBuffer());
     if (this._fileSource) { this._fileSource.stop(); this._fileSource.disconnect(); }
     this._ensureAnalyser();
+    this._ensureChromaAnalyser();
     this._fileSource = this.context.createBufferSource();
     this._fileSource.buffer = buf;
     this._fileSource.loop = true;
     this._fileSource.connect(this.analyser);
+    this._fileSource.connect(this.chromaAnalyser);
     this.analyser.connect(this.context.destination);
     this._connectStereo(this._fileSource);
     this._fileSource.start();
@@ -56,8 +62,10 @@ export class AudioAnalyser {
   _connectStream(stream) {
     this._ensureContext();
     this._ensureAnalyser();
+    this._ensureChromaAnalyser();
     const source = this.context.createMediaStreamSource(stream);
     source.connect(this.analyser);
+    source.connect(this.chromaAnalyser);
     this._connectStereo(source);
   }
 
@@ -90,6 +98,14 @@ export class AudioAnalyser {
 
   _ensureContext() {
     if (!this.context) this.context = new AudioContext();
+  }
+
+  _ensureChromaAnalyser() {
+    if (this.chromaAnalyser) return;
+    this.chromaAnalyser = this.context.createAnalyser();
+    this.chromaAnalyser.fftSize = 8192;          // ~5.4 Hz/bin at 44100 → resolves semitones from C3 up
+    this.chromaAnalyser.smoothingTimeConstant = 0.0;
+    this.chromaData = new Uint8Array(this.chromaAnalyser.frequencyBinCount); // 4096 bins
   }
 
   _ensureAnalyser() {
@@ -182,7 +198,14 @@ export class AudioAnalyser {
     this._smoothed.high = this._smoothed.high * 0.65 + nHigh * 0.35;
 
     // ── Chromagram (12-bin pitch class energy for audio tonality) ────
-    this.chromagram = this._computeChromagram(binHz);
+    // Use the high-res analyser (8192-pt) if available; fall back to main analyser.
+    if (this.chromaAnalyser) {
+      this.chromaAnalyser.getByteFrequencyData(this.chromaData);
+      const chromaBinHz = this.context.sampleRate / this.chromaAnalyser.fftSize;
+      this.chromagram = this._computeChromagram(chromaBinHz, this.chromaData);
+    } else {
+      this.chromagram = this._computeChromagram(binHz, this.dataArray);
+    }
 
     // ── Stereo waveform for oscilloscope ─────────────────────────────
     if (this.analyserL) {
@@ -291,10 +314,13 @@ export class AudioAnalyser {
     return Math.min(Math.max((sim - lo) / (hi - lo), 0), 1);
   }
 
-  // 12-bin chromagram from FFT — sums note harmonics across octaves C2–C7
-  _computeChromagram(binHz) {
+  // 12-bin chromagram from FFT — sums note harmonics across octaves C2–C7.
+  // `data` should be a Uint8Array of FFT magnitude bins (0-255).
+  // Uses spectral contrast: peak energy at each pitch class minus its local spectral floor,
+  // so the result is immune to broadband content (reverb, noise, rich harmonics).
+  _computeChromagram(binHz, data) {
     const chroma = new Float32Array(12);
-    if (!this.dataArray) return chroma;
+    if (!data) return chroma;
     for (let pc = 0; pc < 12; pc++) {
       let energy = 0, totalW = 0;
       for (let oct = 2; oct <= 7; oct++) {
@@ -302,11 +328,13 @@ export class AudioAnalyser {
         const freq = 440 * Math.pow(2, (midiNote - 69) / 12);
         if (freq > 18000) break;
         const bin = Math.round(freq / binHz);
-        if (bin < 1 || bin >= this.dataArray.length - 1) continue;
+        if (bin < 4 || bin >= data.length - 4) continue;
         const w = 1.0 / oct;                             // lower octaves weighted more
-        energy += (this.dataArray[bin-1]/255 * 0.5 +
-                   this.dataArray[bin  ]/255 * 1.0 +
-                   this.dataArray[bin+1]/255 * 0.5) / 2.0 * w;
+        // Peak: ±1 bin around the target frequency
+        const peak = (data[bin-1]/255 * 0.5 + data[bin]/255 + data[bin+1]/255 * 0.5) / 2.0;
+        // Local floor: bins ±(3–4) away (between adjacent semitones at this octave)
+        const floor = (data[bin-4]/255 + data[bin-3]/255 + data[bin+3]/255 + data[bin+4]/255) / 4.0;
+        energy += Math.max(0, peak - floor) * w;
         totalW += w;
       }
       chroma[pc] = totalW > 0 ? energy / totalW : 0;

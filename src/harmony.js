@@ -136,22 +136,40 @@ export class HarmonyAnalyzer {
 
   // Audio-based tonality: accepts a 12-bin chromagram instead of MIDI events.
   // Runs the same K-S correlation; used when MIDI is silent.
+  //
+  // Key insight: a single FFT frame (46ms) is too noisy for reliable key detection.
+  // We maintain a 2-second exponential moving average of the chromagram before
+  // running K-S — this averages out percussion, transients, and harmonic noise,
+  // leaving only the persistent pitch classes that define the key.
   updateFromChroma(chroma, fftEnergy = 0) {
     const now     = performance.now();
     const deltaMs = now - this._lastUpdateMs;
     this._lastUpdateMs = now;
 
-    // Normalise chromagram to [0,1] then apply gamma to suppress noise floor
-    // and emphasise actual pitch class peaks (audio chroma is noisier than MIDI).
-    let histMax = 0.001;
-    for (let i = 0; i < 12; i++) histMax = Math.max(histMax, chroma[i]);
-    const histogram = new Float32Array(12);
-    for (let i = 0; i < 12; i++) {
-      const norm = chroma[i] / histMax;
-      histogram[i] = norm * norm * norm;   // γ=3: strongly suppresses near-uniform noise
+    // ── Step 1: accumulate chromagram over ~2 seconds (τ ≈ 2s at 60fps) ──
+    if (!this._chromaAccum) this._chromaAccum = new Float32Array(12);
+    // alpha = 1 - e^(-dt/τ) ≈ dt/τ for small dt; τ = 2000ms
+    const alpha = Math.min(deltaMs / 2000, 0.15);
+    if (fftEnergy > 0.02) {
+      // Signal present: integrate new chromagram into accumulator
+      for (let i = 0; i < 12; i++) {
+        this._chromaAccum[i] = this._chromaAccum[i] * (1 - alpha) + chroma[i] * alpha;
+      }
+    } else {
+      // Silence: slowly drain accumulator to neutral
+      for (let i = 0; i < 12; i++) this._chromaAccum[i] *= 0.998;
     }
 
-    // K-S correlation — identical to update()
+    // ── Step 2: normalise + γ=3 to suppress residual noise ─────────────
+    let histMax = 0.001;
+    for (let i = 0; i < 12; i++) histMax = Math.max(histMax, this._chromaAccum[i]);
+    const histogram = new Float32Array(12);
+    for (let i = 0; i < 12; i++) {
+      const n = this._chromaAccum[i] / histMax;
+      histogram[i] = n * n * n;   // γ=3: peaks stay ~1, background noise → 0
+    }
+
+    // ── Step 3: K-S correlation ─────────────────────────────────────────
     let bestMajor = 0, bestMinor = 0;
     for (let root = 0; root < 12; root++) {
       bestMajor = Math.max(bestMajor, dot(histogram, rotateTo(MAJOR_PROFILE, root)));
@@ -159,21 +177,30 @@ export class HarmonyAnalyzer {
     }
 
     const total      = bestMajor + bestMinor;
-    const hasContent = total > 0.05 && fftEnergy > 0.04;
+    const hasContent = total > 0.05 && fftEnergy > 0.03;
 
     if (hasContent) {
       const raw = (bestMajor - bestMinor) / total;
-      // Stronger amplification than MIDI path (audio signal is inherently weaker)
       this._targetTonality = Math.tanh(raw * 40);
     } else if (fftEnergy < 0.02) {
-      this._targetTonality *= 0.997;   // slow decay to neutral on silence
+      this._targetTonality *= 0.997;
     }
 
-    // Smooth tonality (same speed as MIDI path)
+    // Debug: log every 2 seconds
+    if (!this._lastChromaDebugMs || now - this._lastChromaDebugMs > 2000) {
+      this._lastChromaDebugMs = now;
+      const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+      const accumStr = Array.from(this._chromaAccum || []).map((v,i) => v > 0.05 ? `${NOTE_NAMES[i]}:${v.toFixed(3)}` : null).filter(Boolean).join(' ');
+      const topChroma = Array.from(chroma).map((v,i) => v > 0.05 ? `${NOTE_NAMES[i]}:${v.toFixed(2)}` : null).filter(Boolean).join(' ');
+      console.log(`[Chroma] energy=${fftEnergy.toFixed(3)} hasContent=${hasContent} maj=${bestMajor.toFixed(2)} min=${bestMinor.toFixed(2)} target=${this._targetTonality.toFixed(3)} smooth=${this.tonality.toFixed(3)}`);
+      console.log(`  chroma(raw): ${topChroma || '(empty)'}`);
+      console.log(`  chroma(acc): ${accumStr || '(empty)'}`);
+    }
+
+    // ── Step 4: smooth output ───────────────────────────────────────────
     const tonalitySpeed = 0.004 * deltaMs;
     this.tonality += (this._targetTonality - this.tonality) * Math.min(tonalitySpeed, 1);
 
-    // No MIDI velocity → pulse driven purely by FFT energy floor
     const pulseDecay   = Math.pow(0.92, deltaMs / 16.67);
     this.pulse        *= pulseDecay;
     const displayPulse = Math.max(this.pulse, fftEnergy * 0.35);
