@@ -11,26 +11,35 @@ export class AudioAnalyser {
     this._kickBaseline  = 0;
     this._snareBaseline = 0;
     this._kickBandMax   = 0.001;
-    this._kickHarmMax   = 0.001;  // tracks 150-450Hz for spectral shape check
+    this._kickHarmMax   = 0.001;
     this._snareBandMax  = 0.001;
     this._kick  = 0;
     this._snare = 0;
     // Template matching
-    this._templates  = {};   // band -> Float32Array(frequencyBinCount)
-    this._tapSamples = [];   // snapshots accumulated during tap training
-    this._tapTarget  = null; // band name being trained right now
-    // Chromagram (12-bin pitch class energy, computed every frame from FFT)
+    this._templates  = {};
+    this._tapSamples = [];
+    this._tapTarget  = null;
+    // Chromagram
     this.chromagram   = new Float32Array(12);
-    // High-resolution analyser for chromagram (8192-pt FFT → ~5.4 Hz/bin at 44100 Hz)
-    // Separate from the main analyser so band detection is unaffected.
     this.chromaAnalyser = null;
     this.chromaData     = null;
-    // Stereo waveform for oscilloscope (time-domain PCM, L and R channels)
-    this.analyserL   = null;
-    this.analyserR   = null;
-    this.waveformL   = null;
-    this.waveformR   = null;
+    // Stereo waveform for oscilloscope
+    this.analyserL = null;
+    this.analyserR = null;
+    this.waveformL = null;
+    this.waveformR = null;
+    // File playback state
+    this._buffer      = null;   // decoded AudioBuffer
+    this._isPlaying   = false;
+    this._startTime   = 0;      // context.currentTime when last started
+    this._pauseOffset = 0;      // seconds into file when paused
+    // Stream source tracking — prevents echo when switching between stream and file
+    this._activeStreamSource = null;
+    // Media stream output for video recording
+    this._mediaStreamDest = null;
   }
+
+  // ── Public connection API ───────────────────────────────────────────
 
   async connectSystemAudio() {
     const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
@@ -46,35 +55,138 @@ export class AudioAnalyser {
   async connectFile(file) {
     this._ensureContext();
     const buf = await this.context.decodeAudioData(await file.arrayBuffer());
-    if (this._fileSource) { this._fileSource.stop(); this._fileSource.disconnect(); }
-    this._ensureAnalyser();
-    this._ensureChromaAnalyser();
-    this._fileSource = this.context.createBufferSource();
-    this._fileSource.buffer = buf;
-    this._fileSource.loop = true;
-    this._fileSource.connect(this.analyser);
-    try {
-      this._ensureChromaAnalyser();
-      this._fileSource.connect(this.chromaAnalyser);
-    } catch (e) {
-      console.warn('Chroma analyser setup failed:', e);
+
+    // Disconnect stream source — was feeding system audio back into the same analyser,
+    // causing the file audio played through destination to be re-captured, creating echo.
+    if (this._activeStreamSource) {
+      try { this._activeStreamSource.disconnect(); } catch (_) {}
+      this._activeStreamSource = null;
     }
+
+    // Clean up old file source
+    if (this._fileSource) {
+      this._isPlaying = false;
+      try { this._fileSource.stop(); } catch (_) {}
+      try { this._fileSource.disconnect(); } catch (_) {}
+      this._fileSource = null;
+    }
+
+    this._ensureAnalyser();
+    // Only file playback needs analyser → speakers; stream sources are analysis-only
     this.analyser.connect(this.context.destination);
+
+    this._buffer = buf;
+    this._pauseOffset = 0;
+    this._ensureChromaAnalyser();
+    this._startSource(0);
+  }
+
+  // ── File playback controls ─────────────────────────────────────────
+
+  play() {
+    if (this._isPlaying || !this._buffer) return;
+    this._startSource(this._pauseOffset);
+  }
+
+  pause() {
+    if (!this._isPlaying || !this._fileSource) return;
+    this._pauseOffset = this.getPlaybackTime();
+    this._isPlaying   = false;   // set before stop() so onended doesn't reset offset
+    try { this._fileSource.stop(); } catch (_) {}
+    this._fileSource = null;
+  }
+
+  // ratio: 0–1 relative to total duration
+  seek(ratio) {
+    if (!this._buffer) return;
+    const offset = Math.max(0, Math.min(ratio * this._buffer.duration, this._buffer.duration));
+    const wasPlaying = this._isPlaying;
+    if (this._isPlaying) {
+      this._isPlaying = false;
+      try { this._fileSource.stop(); } catch (_) {}
+      this._fileSource = null;
+    }
+    this._pauseOffset = offset;
+    if (wasPlaying) this._startSource(offset);
+  }
+
+  removeFile() {
+    if (this._fileSource) {
+      this._isPlaying = false;
+      try { this._fileSource.stop(); } catch (_) {}
+      try { this._fileSource.disconnect(); } catch (_) {}
+      this._fileSource = null;
+    }
+    try { this.analyser.disconnect(this.context.destination); } catch (_) {}
+    this._buffer      = null;
+    this._pauseOffset = 0;
+  }
+
+  getPlaybackTime() {
+    if (!this._buffer) return 0;
+    if (!this._isPlaying) return this._pauseOffset;
+    const t = this._pauseOffset + (this.context.currentTime - this._startTime);
+    return Math.min(t, this._buffer.duration);
+  }
+
+  getDuration()   { return this._buffer ? this._buffer.duration : 0; }
+  get hasFile()   { return !!this._buffer; }
+  get isPlaying() { return this._isPlaying; }
+
+  // Returns an audio MediaStream for video recording (creates on first call)
+  enableMediaStreamOutput() {
+    if (!this.context || !this.analyser) return null;
+    if (!this._mediaStreamDest) {
+      this._mediaStreamDest = this.context.createMediaStreamDestination();
+      this.analyser.connect(this._mediaStreamDest);
+    }
+    return this._mediaStreamDest.stream;
+  }
+
+  // ── Internal ───────────────────────────────────────────────────────
+
+  _startSource(offset) {
+    if (this._fileSource) {
+      try { this._fileSource.stop(); } catch (_) {}
+      try { this._fileSource.disconnect(); } catch (_) {}
+    }
+    this._fileSource = this.context.createBufferSource();
+    this._fileSource.buffer = this._buffer;
+    this._fileSource.loop   = false;
+    this._fileSource.connect(this.analyser);
+    try { this._fileSource.connect(this.chromaAnalyser); } catch (_) {}
     this._connectStereo(this._fileSource);
-    this._fileSource.start();
+    if (this._mediaStreamDest) {
+      try { this._fileSource.connect(this._mediaStreamDest); } catch (_) {}
+    }
+    this._fileSource.start(0, offset);
+    this._startTime   = this.context.currentTime;
+    this._pauseOffset = offset;
+    this._isPlaying   = true;
+    this._fileSource.onended = () => {
+      // Only reset to beginning on natural end (not when we stop manually)
+      if (this._isPlaying) {
+        this._isPlaying   = false;
+        this._pauseOffset = 0;
+      }
+    };
   }
 
   _connectStream(stream) {
     this._ensureContext();
     this._ensureAnalyser();
+    // Remove old stream source to prevent double-input
+    if (this._activeStreamSource) {
+      try { this._activeStreamSource.disconnect(); } catch (_) {}
+    }
     const source = this.context.createMediaStreamSource(stream);
+    this._activeStreamSource = source;
     source.connect(this.analyser);
-    // High-res chromagram analyser — non-critical, don't let it block audio
     try {
       this._ensureChromaAnalyser();
       source.connect(this.chromaAnalyser);
     } catch (e) {
-      console.warn('Chroma analyser setup failed, falling back to main analyser:', e);
+      console.warn('Chroma analyser setup failed:', e);
     }
     this._connectStereo(source);
   }
@@ -87,7 +199,6 @@ export class AudioAnalyser {
       splitter.connect(this.analyserL, 0);
       splitter.connect(this.analyserR, 1);
     } catch (_) {
-      // Mono fallback: connect same source to both channels
       sourceNode.connect(this.analyserL);
       sourceNode.connect(this.analyserR);
     }
@@ -113,18 +224,20 @@ export class AudioAnalyser {
   _ensureChromaAnalyser() {
     if (this.chromaAnalyser) return;
     this.chromaAnalyser = this.context.createAnalyser();
-    this.chromaAnalyser.fftSize = 8192;          // ~5.4 Hz/bin at 44100 → resolves semitones from C3 up
+    this.chromaAnalyser.fftSize = 8192;
     this.chromaAnalyser.smoothingTimeConstant = 0.0;
-    this.chromaData = new Uint8Array(this.chromaAnalyser.frequencyBinCount); // 4096 bins
+    this.chromaData = new Uint8Array(this.chromaAnalyser.frequencyBinCount);
   }
 
   _ensureAnalyser() {
     if (this.analyser) return;
     this.analyser = this.context.createAnalyser();
     this.analyser.fftSize = 2048;
-    this.analyser.smoothingTimeConstant = 0.0; // no built-in smoothing — we do our own per-band
+    this.analyser.smoothingTimeConstant = 0.0;
     this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
   }
+
+  // ── Frame update ───────────────────────────────────────────────────
 
   update() {
     if (!this.analyser) return this.bands;
@@ -137,17 +250,15 @@ export class AudioAnalyser {
       bass:        this._avg(80,   250,   binHz),
       mid:         this._avg(250,  2000,  binHz),
       high:        this._avg(2000, 16000, binHz),
-      kickRaw:     this._avg(35,   70,    binHz),   // kick sub fundamental
-      kickHarmRaw: this._avg(150,  450,   binHz),   // spectral shape check (bass harmonics live here)
-      snareRaw:    this._avg(2500, 7000,  binHz),   // snare crack — above bass harmonic range
+      kickRaw:     this._avg(35,   70,    binHz),
+      kickHarmRaw: this._avg(150,  450,   binHz),
+      snareRaw:    this._avg(2500, 7000,  binHz),
     };
 
-    // AGC — always on raw values, before any gating
     const energy = (raw.subBass + raw.bass + raw.mid + raw.high) / 4;
     this._maxEnergy = Math.max(this._maxEnergy * 0.998, energy + 0.001);
     const gain = 1 / this._maxEnergy;
 
-    // ── Transient detection — per-band normalization ──────────────────
     this._kickBandMax  = Math.max(this._kickBandMax  * 0.999, raw.kickRaw     + 0.0005);
     this._kickHarmMax  = Math.max(this._kickHarmMax  * 0.999, raw.kickHarmRaw + 0.0005);
     this._snareBandMax = Math.max(this._snareBandMax * 0.999, raw.snareRaw    + 0.0005);
@@ -156,16 +267,11 @@ export class AudioAnalyser {
     const kickHarmNorm = raw.kickHarmRaw / this._kickHarmMax;
     const snareRawNorm = raw.snareRaw    / this._snareBandMax;
 
-    // Spectral shape check for kick:
-    //   Kick  → large sub (35-70Hz), tiny harmonics (150-450Hz) → ratio low  → full score
-    //   Bass note → small sub,       large harmonics             → ratio high → score suppressed
-    //   Bass+kick → kick lifts sub much more than harmonics      → ratio drops → still detected
-    const harmRatio  = Math.min(kickHarmNorm / (kickRawNorm + 0.05), 3.0) / 3.0; // 0–1
-    const kickScore  = kickRawNorm * (1.0 - harmRatio * 0.75);
+    const harmRatio = Math.min(kickHarmNorm / (kickRawNorm + 0.05), 3.0) / 3.0;
+    const kickScore = kickRawNorm * (1.0 - harmRatio * 0.75);
 
-    // Baseline = sustained floor; transient = spike above it
-    this._kickBaseline  = this._kickBaseline  * 0.95 + kickScore      * 0.05;
-    this._snareBaseline = this._snareBaseline * 0.93 + snareRawNorm   * 0.07;
+    this._kickBaseline  = this._kickBaseline  * 0.95 + kickScore    * 0.05;
+    this._snareBaseline = this._snareBaseline * 0.93 + snareRawNorm * 0.07;
 
     const kickTransient  = Math.max(0, kickScore    - this._kickBaseline)  * 10;
     const snareTransient = Math.max(0, snareRawNorm - this._snareBaseline) * 9;
@@ -173,10 +279,6 @@ export class AudioAnalyser {
     this._kick  = Math.max(Math.min(kickTransient,  1), this._kick  * 0.72);
     this._snare = Math.max(Math.min(snareTransient, 1), this._snare * 0.68);
 
-    // ── Step 2: sidechain gating ──────────────────────────────────────
-    // When kick fires, suppress the low-freq sustained signals so the same
-    // frequency content doesn't bleed into both drums AND bass visuals.
-    // snare gate reduces mid bleed when snare hits.
     const kickGate  = 1.0 - this._kick  * 0.85;
     const snareGate = 1.0 - this._snare * 0.70;
 
@@ -185,30 +287,20 @@ export class AudioAnalyser {
     const nMid     = Math.min(raw.mid     * gain, 1) * snareGate;
     const nHigh    = Math.min(raw.high    * gain, 1);
 
-    // ── Step 3: asymmetric sustained envelopes ────────────────────────
-    // Slow attack = doesn't respond to brief transients (kick lasts ~14 frames,
-    // bass note lasts hundreds). Fast-ish decay so visuals stay alive.
-    //
-    // sub-bass / pads: very slow attack (τ ≈ 0.27s), medium decay
     this._smoothed.subBass = nSubBass > this._smoothed.subBass
       ? this._smoothed.subBass * 0.94 + nSubBass * 0.06
       : this._smoothed.subBass * 0.85 + nSubBass * 0.15;
 
-    // bass: slow attack (τ ≈ 0.18s), medium decay — sustained bass lines only
     this._smoothed.bass = nBass > this._smoothed.bass
       ? this._smoothed.bass * 0.91 + nBass * 0.09
       : this._smoothed.bass * 0.80 + nBass * 0.20;
 
-    // mid / lead: medium attack (τ ≈ 0.10s) — melodic content
     this._smoothed.mid = nMid > this._smoothed.mid
       ? this._smoothed.mid * 0.84 + nMid * 0.16
       : this._smoothed.mid * 0.75 + nMid * 0.25;
 
-    // high / atmos: fast and symmetric — high freq is naturally transient-like
     this._smoothed.high = this._smoothed.high * 0.65 + nHigh * 0.35;
 
-    // ── Chromagram (12-bin pitch class energy for audio tonality) ────
-    // Use the high-res analyser (8192-pt) if available; fall back to main analyser.
     if (this.chromaAnalyser) {
       this.chromaAnalyser.getByteFrequencyData(this.chromaData);
       const chromaBinHz = this.context.sampleRate / this.chromaAnalyser.fftSize;
@@ -217,27 +309,18 @@ export class AudioAnalyser {
       this.chromagram = this._computeChromagram(binHz, this.dataArray);
     }
 
-    // ── Stereo waveform for oscilloscope ─────────────────────────────
     if (this.analyserL) {
       this.analyserL.getFloatTimeDomainData(this.waveformL);
       this.analyserR.getFloatTimeDomainData(this.waveformR);
 
-      // Correlation check on first 256 samples (fast).
-      // System audio often outputs L=R even for "stereo" streams.
-      // If channels are highly correlated, apply a delay to create a
-      // Lissajous-style phase portrait instead of a boring diagonal.
       let dotLR = 0, magL = 0, magR = 0;
       for (let i = 0; i < 256; i++) {
         dotLR += this.waveformL[i] * this.waveformR[i];
         magL  += this.waveformL[i] * this.waveformL[i];
         magR  += this.waveformR[i] * this.waveformR[i];
       }
-      const corr = (magL > 1e-6 && magR > 1e-6)
-        ? dotLR / Math.sqrt(magL * magR)
-        : 1.0;
-
+      const corr = (magL > 1e-6 && magR > 1e-6) ? dotLR / Math.sqrt(magL * magR) : 1.0;
       if (corr > 0.90) {
-        // Delay ≈ 128 samples ≈ 2.9ms → ~90° phase shift at ~87Hz bass
         const delay = 128;
         for (let i = 0; i < this.waveformR.length; i++) {
           this.waveformR[i] = this.waveformL[(i + delay) % this.waveformL.length];
@@ -245,18 +328,11 @@ export class AudioAnalyser {
       }
     }
 
-    // ── Template gating (when templates are trained) ─────────────────
-    // Build a snapshot of the current spectrum for cosine similarity.
-    // Only pay the cost when at least one template exists.
     if (Object.keys(this._templates).length > 0) {
       const spec = new Float32Array(this.dataArray.length);
       for (let i = 0; i < this.dataArray.length; i++) spec[i] = this.dataArray[i] / 255;
-
-      // Transient bands — gate the final kick/snare signals
       this._kick  *= this._tmplGate('kick',  spec);
       this._snare *= this._tmplGate('snare', spec);
-
-      // Sustained bands — gate the smoothed envelope
       this._smoothed.bass    *= this._tmplGate('bass',  spec);
       this._smoothed.mid     *= this._tmplGate('lead',  spec);
       this._smoothed.high    *= this._tmplGate('atmos', spec);
@@ -274,7 +350,8 @@ export class AudioAnalyser {
     return this.bands;
   }
 
-  // ── Template training API ───────────────────────────────────────────
+  // ── Template training API ──────────────────────────────────────────
+
   startTap(band) {
     this._tapTarget  = band;
     this._tapSamples = [];
@@ -317,32 +394,25 @@ export class AudioAnalyser {
     return denom < 1e-9 ? 0 : dot / denom;
   }
 
-  // Gate value: 0 when sim ≤ lo, 1 when sim ≥ hi — smooth ramp between
   _tmplGate(band, currentSpec, lo = 0.35, hi = 0.75) {
     if (!this._templates[band] || !currentSpec) return 1.0;
     const sim = this._cosSim(currentSpec, this._templates[band]);
     return Math.min(Math.max((sim - lo) / (hi - lo), 0), 1);
   }
 
-  // 12-bin chromagram from FFT — sums note harmonics across octaves C2–C7.
-  // `data` should be a Uint8Array of FFT magnitude bins (0-255).
-  // Uses spectral contrast: peak energy at each pitch class minus its local spectral floor,
-  // so the result is immune to broadband content (reverb, noise, rich harmonics).
   _computeChromagram(binHz, data) {
     const chroma = new Float32Array(12);
     if (!data) return chroma;
     for (let pc = 0; pc < 12; pc++) {
       let energy = 0, totalW = 0;
       for (let oct = 2; oct <= 7; oct++) {
-        const midiNote = (oct + 1) * 12 + pc;           // C2=36, C3=48 …
+        const midiNote = (oct + 1) * 12 + pc;
         const freq = 440 * Math.pow(2, (midiNote - 69) / 12);
         if (freq > 18000) break;
         const bin = Math.round(freq / binHz);
         if (bin < 4 || bin >= data.length - 4) continue;
-        const w = 1.0 / oct;                             // lower octaves weighted more
-        // Peak: ±1 bin around the target frequency
+        const w    = 1.0 / oct;
         const peak = (data[bin-1]/255 * 0.5 + data[bin]/255 + data[bin+1]/255 * 0.5) / 2.0;
-        // Local floor: bins ±(3–4) away (between adjacent semitones at this octave)
         const floor = (data[bin-4]/255 + data[bin-3]/255 + data[bin+3]/255 + data[bin+4]/255) / 4.0;
         energy += Math.max(0, peak - floor) * w;
         totalW += w;

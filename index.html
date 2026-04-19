@@ -601,6 +601,90 @@
     #tutorial-skip { opacity: 0.28; font-size: 0.60rem !important; padding: 6px 9px !important; }
     #tutorial-skip:hover { opacity: 0.65; }
 
+    /* ── Transport bar ─────────────────────────────────────────── */
+    #transport {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(8, 8, 14, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      border-radius: 10px;
+      padding: 8px 14px;
+      backdrop-filter: blur(14px);
+      pointer-events: all;
+      z-index: 200;
+      max-width: 90vw;
+      transition: opacity 0.3s, transform 0.3s;
+    }
+    #transport.hidden {
+      opacity: 0;
+      pointer-events: none;
+      transform: translateX(-50%) translateY(8px);
+    }
+    #transport-name {
+      font-size: 0.60rem;
+      letter-spacing: 0.05em;
+      opacity: 0.40;
+      max-width: 110px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #transport-playpause {
+      padding: 4px 10px;
+      font-size: 0.80rem;
+      min-width: 34px;
+      text-align: center;
+    }
+    #transport-time, #transport-duration {
+      font-size: 0.60rem;
+      font-variant-numeric: tabular-nums;
+      font-family: 'SF Mono', 'Menlo', monospace;
+      opacity: 0.38;
+      white-space: nowrap;
+    }
+    #transport-scrub {
+      width: 150px;
+      height: 3px;
+      accent-color: rgba(255, 255, 255, 0.65);
+      cursor: pointer;
+    }
+    #transport-remove {
+      padding: 3px 9px;
+      font-size: 0.62rem;
+      opacity: 0.30;
+      transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+    }
+    #transport-remove:hover {
+      opacity: 0.80;
+      color: #ff9090;
+      border-color: rgba(255, 100, 100, 0.40);
+    }
+
+    /* ── Record button ──────────────────────────────────────────── */
+    #btn-record {
+      position: fixed;
+      bottom: 20px;
+      right: 95px;
+      padding: 6px 11px;
+      font-size: 0.60rem;
+      letter-spacing: 0.10em;
+      opacity: 0.22;
+      pointer-events: all;
+      transition: opacity 0.2s, color 0.2s, border-color 0.2s, background 0.2s;
+    }
+    #btn-record:hover { opacity: 0.65; }
+    #btn-record.active {
+      opacity: 1;
+      color: #ff6060;
+      border-color: rgba(255, 80, 80, 0.50);
+      background: rgba(255, 60, 60, 0.10);
+    }
+
     /* ── Error overlay ───────────────────────────────────────────── */
     #error {
       position: fixed;
@@ -773,6 +857,17 @@
 
 <button id="btn-ripple-color" title="Ripple color"></button>
 <input type="color" id="ripple-color-input" value="#00D9FF" style="display:none">
+
+<div id="transport" class="hidden">
+  <span id="transport-name"></span>
+  <button id="transport-playpause">▶</button>
+  <span id="transport-time">0:00</span>
+  <input type="range" id="transport-scrub" min="0" max="100" step="0.1" value="0">
+  <span id="transport-duration">0:00</span>
+  <button id="transport-remove" title="Remove file">✕</button>
+</div>
+
+<button id="btn-record">REC</button>
 
 <div id="tutorial-overlay">
   <div id="tutorial-spotlight"></div>

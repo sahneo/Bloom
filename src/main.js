@@ -447,11 +447,130 @@ async function init() {
   fileInput.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    try { await audio.connectFile(file); onConnected(file.name); }
-    catch (e) { console.error('File:', e); }
+    try {
+      await audio.connectFile(file);
+      onConnected(file.name);
+      showTransport(file.name);
+    } catch (err) { console.error('File:', err); }
   });
 
   updateTrainUI();
+
+  // ── Transport ──────────────────────────────────────────────────────
+  const transportEl      = document.getElementById('transport');
+  const transportNameEl  = document.getElementById('transport-name');
+  const transportTimeEl  = document.getElementById('transport-time');
+  const transportDurEl   = document.getElementById('transport-duration');
+  const transportScrub   = document.getElementById('transport-scrub');
+  const transportPlayBtn = document.getElementById('transport-playpause');
+  const transportRemBtn  = document.getElementById('transport-remove');
+  let   _transportTimer  = null;
+
+  function fmtTime(s) {
+    const m = Math.floor(s / 60);
+    return `${m}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  }
+
+  function updateTransportUI() {
+    if (!audio.hasFile) return;
+    const t   = audio.getPlaybackTime();
+    const dur = audio.getDuration();
+    transportTimeEl.textContent = fmtTime(t);
+    transportDurEl.textContent  = fmtTime(dur);
+    if (!transportScrub._seeking) transportScrub.value = dur > 0 ? (t / dur) * 100 : 0;
+    if (!audio.isPlaying && t >= dur - 0.05 && dur > 0) {
+      transportPlayBtn.textContent = '↩';
+    } else {
+      transportPlayBtn.textContent = audio.isPlaying ? '⏸' : '▶';
+    }
+  }
+
+  function showTransport(filename) {
+    transportNameEl.textContent = filename.length > 22 ? filename.slice(0, 20) + '…' : filename;
+    transportEl.classList.remove('hidden');
+    updateTransportUI();
+    if (_transportTimer) clearInterval(_transportTimer);
+    _transportTimer = setInterval(updateTransportUI, 200);
+  }
+
+  function hideTransport() {
+    transportEl.classList.add('hidden');
+    if (_transportTimer) { clearInterval(_transportTimer); _transportTimer = null; }
+  }
+
+  transportPlayBtn.addEventListener('click', () => {
+    if (!audio.hasFile) return;
+    const t = audio.getPlaybackTime(), dur = audio.getDuration();
+    if (!audio.isPlaying && t >= dur - 0.05 && dur > 0) {
+      audio.seek(0);
+      audio.play();
+    } else if (audio.isPlaying) {
+      audio.pause();
+    } else {
+      audio.play();
+    }
+    updateTransportUI();
+  });
+
+  transportScrub.addEventListener('mousedown',  () => { transportScrub._seeking = true; });
+  transportScrub.addEventListener('touchstart', () => { transportScrub._seeking = true; }, { passive: true });
+  const _commitScrub = () => {
+    audio.seek(parseFloat(transportScrub.value) / 100);
+    transportScrub._seeking = false;
+  };
+  transportScrub.addEventListener('mouseup',  _commitScrub);
+  transportScrub.addEventListener('touchend', _commitScrub);
+
+  transportRemBtn.addEventListener('click', () => {
+    audio.removeFile();
+    hideTransport();
+    statusAudio.textContent = 'Audio: not connected';
+    statusAudio.classList.remove('active');
+    uiEl.classList.remove('faded');
+  });
+
+  // ── Video recording ────────────────────────────────────────────────
+  const btnRecord = document.getElementById('btn-record');
+  let   _recorder = null;
+  let   _recChunks = [];
+
+  function startRecording() {
+    const videoStream = canvas.captureStream(30);
+    const tracks = [...videoStream.getVideoTracks()];
+    const audioStream = audio.enableMediaStreamOutput();
+    if (audioStream) tracks.push(...audioStream.getAudioTracks());
+    const combined = new MediaStream(tracks);
+    const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+      ? 'video/webm;codecs=vp9,opus' : 'video/webm';
+    _recorder  = new MediaRecorder(combined, { mimeType: mime });
+    _recChunks = [];
+    _recorder.ondataavailable = e => { if (e.data.size > 0) _recChunks.push(e.data); };
+    _recorder.onstop = () => {
+      const blob = new Blob(_recChunks, { type: 'video/webm' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = `bloom-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.webm`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      btnRecord.classList.remove('active');
+      btnRecord.textContent = 'REC';
+    };
+    _recorder.start(1000);
+    btnRecord.classList.add('active');
+    btnRecord.textContent = '■ STOP';
+  }
+
+  function stopRecording() {
+    if (_recorder && _recorder.state !== 'inactive') _recorder.stop();
+  }
+
+  btnRecord.addEventListener('click', () => {
+    if (_recorder && _recorder.state === 'recording') stopRecording();
+    else startRecording();
+  });
 
   function frame(ts) {
     const bands = applyBandMutes(audio.update());
