@@ -479,9 +479,9 @@ async function init() {
     transportDurEl.textContent  = fmtTime(dur);
     if (!transportScrub._seeking) transportScrub.value = dur > 0 ? (t / dur) * 100 : 0;
     if (!audio.isPlaying && t >= dur - 0.05 && dur > 0) {
-      transportPlayBtn.textContent = '↩';
+      transportPlayBtn.textContent = '↺';
     } else {
-      transportPlayBtn.textContent = audio.isPlaying ? '⏸' : '▶';
+      transportPlayBtn.textContent = audio.isPlaying ? '||' : '▶';
     }
   }
 
@@ -512,14 +512,17 @@ async function init() {
     updateTransportUI();
   });
 
-  transportScrub.addEventListener('mousedown',  () => { transportScrub._seeking = true; });
-  transportScrub.addEventListener('touchstart', () => { transportScrub._seeking = true; }, { passive: true });
-  const _commitScrub = () => {
+  // 'input' fires during drag — update time display without seeking (avoids audio glitches)
+  transportScrub.addEventListener('input', () => {
+    transportScrub._seeking = true;
+    transportTimeEl.textContent = fmtTime((parseFloat(transportScrub.value) / 100) * audio.getDuration());
+  });
+  // 'change' fires reliably on mouseup/touchend even if pointer drifts off element
+  transportScrub.addEventListener('change', () => {
     audio.seek(parseFloat(transportScrub.value) / 100);
     transportScrub._seeking = false;
-  };
-  transportScrub.addEventListener('mouseup',  _commitScrub);
-  transportScrub.addEventListener('touchend', _commitScrub);
+    updateTransportUI();
+  });
 
   transportRemBtn.addEventListener('click', () => {
     audio.removeFile();
