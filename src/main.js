@@ -129,7 +129,7 @@ function updateDebug(bands, harm) {
 // ── Tunable params (linked to sliders) ──────────────────────────────
 const params = {
   mulSb: 1, mulBass: 3, mulMid: 1, mulHigh: 1, spring: 0.3,
-  modeDrums: 0, modeBass: 0, modeLead: 0, modeAtmos: 0, modePads: 0,
+  modeDrums: 1, modeBass: 0, modeLead: 0, modeAtmos: 0, modePads: 0,
   colorMode: 0,
   tonality:   0,   // -1 minor → +1 major (from HarmonyAnalyzer)
   pulse:      0,   // 0→1 note-attack flash (from HarmonyAnalyzer)
@@ -155,9 +155,128 @@ bindSlider('sl-dissonance',  'v-dissonance',  'dissonanceStrength');
 btnTune.addEventListener('click', () => {
   const hidden = tunePanel.classList.toggle('hidden');
   btnTune.classList.toggle('active', !hidden);
-  // When panel is open, keep it in bottom-right; move button up
   btnTune.style.bottom = hidden ? '20px' : (tunePanel.offsetHeight + 32) + 'px';
 });
+
+// ── Reset to defaults ────────────────────────────────────────────────
+const DEFAULTS = {
+  mulSb: 1, mulBass: 3, mulMid: 1, mulHigh: 1, spring: 0.3,
+  dissonanceStrength: 1,
+  modeDrums: 1, modeBass: 0, modeLead: 0, modeAtmos: 0, modePads: 0,
+};
+
+function resetToDefaults() {
+  Object.assign(params, DEFAULTS);
+  [
+    ['sl-sb',         'v-sb',         'mulSb'],
+    ['sl-bass',       'v-bass',       'mulBass'],
+    ['sl-mid',        'v-mid',        'mulMid'],
+    ['sl-high',       'v-high',       'mulHigh'],
+    ['sl-spring',     'v-spring',     'spring'],
+    ['sl-dissonance', 'v-dissonance', 'dissonanceStrength'],
+  ].forEach(([slId, vlId, key]) => {
+    const sl = document.getElementById(slId);
+    const vl = document.getElementById(vlId);
+    sl.value = DEFAULTS[key];
+    vl.textContent = parseFloat(DEFAULTS[key]).toFixed(2);
+  });
+  Object.entries(modeParamKey).forEach(([band, key]) => {
+    const sel = document.getElementById(`mode-${band}`);
+    if (sel) sel.value = String(DEFAULTS[key] ?? 0);
+  });
+}
+
+document.getElementById('btn-reset-tune').addEventListener('click', resetToDefaults);
+
+// ── Tutorial ─────────────────────────────────────────────────────────
+const TUTORIAL_STEPS = [
+  { el: null,                title: 'Welcome to Bloom',  text: 'Bloom turns sound into light. Connect a MIDI keyboard or audio source and 25,000 particles react in real time.\n\nThis tour explains each control.' },
+  { el: '#btn-midi',         title: 'MIDI',              text: 'Connect a MIDI keyboard or controller. Each note fires a ripple wave — pitch maps to horizontal position on screen.' },
+  { el: '#btn-system',       title: 'Audio Source',      text: 'System Audio captures everything playing on your Mac, no driver needed. Or use Microphone, or load a file.\n\nEach audio band (bass, drums, melody) drives its own particle layer independently.' },
+  { el: '#btn-tune',         title: 'Tune',              text: 'Open this panel to mute or solo each instrument band, switch movement styles (Burst, Shockwave…), or adjust sensitivity sliders.\n\nThe Bass slider controls how many particles are visible.' },
+  { el: '#btn-color',        title: 'Band Colors',       text: 'Toggle debug colors:\nRed = drums\nBlue = bass\nGreen = lead\nMagenta = atmosphere\nOrange = pads\n\nUseful for tuning your mix.' },
+  { el: '#btn-oscillo',      title: 'Oscilloscope',      text: 'Switch to waveform mode to see the raw stereo audio signal instead of particles.' },
+  { el: '#btn-train',        title: 'Train',             text: 'Teach Bloom which frequencies belong to which instrument by tapping along in rhythm with each band.\n\nHelps when automatic detection is off.' },
+  { el: '#btn-ripple-color', title: 'Ripple Color',      text: 'Pick the accent color for MIDI note ripple waves using this color swatch.' },
+];
+
+let tutStep = -1;
+const tutOverlay   = document.getElementById('tutorial-overlay');
+const tutSpotlight = document.getElementById('tutorial-spotlight');
+const tutTitleEl   = document.getElementById('tutorial-title');
+const tutTextEl    = document.getElementById('tutorial-text');
+const tutCounter   = document.getElementById('tutorial-counter');
+const tutCard      = document.getElementById('tutorial-card');
+const tutPrevBtn   = document.getElementById('tutorial-prev');
+const tutNextBtn   = document.getElementById('tutorial-next');
+const tutSkipBtn   = document.getElementById('tutorial-skip');
+const btnHelp      = document.getElementById('btn-help');
+
+function positionTutCard(rect) {
+  const pad = 16, cardW = 280, cardH = 200;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  let cy = rect ? rect.bottom + pad : vh / 2 - cardH / 2;
+  if (rect && cy + cardH > vh - 20) cy = rect.top - pad - cardH;
+  cy = Math.max(20, Math.min(cy, vh - cardH - 20));
+  let cx = rect ? rect.left + rect.width / 2 - cardW / 2 : vw / 2 - cardW / 2;
+  cx = Math.max(20, Math.min(cx, vw - cardW - 20));
+  tutCard.style.cssText = `left:${cx}px; top:${cy}px; width:${cardW}px;`;
+}
+
+function showTutStep(n) {
+  const step = TUTORIAL_STEPS[n];
+  document.querySelectorAll('.tut-highlight').forEach(e => e.classList.remove('tut-highlight'));
+  tutTitleEl.textContent  = step.title;
+  tutTextEl.textContent   = step.text;
+  tutCounter.textContent  = `${n + 1} / ${TUTORIAL_STEPS.length}`;
+  tutPrevBtn.disabled     = n === 0;
+  tutNextBtn.textContent  = n === TUTORIAL_STEPS.length - 1 ? 'Done ✓' : 'Next →';
+
+  if (step.el) {
+    const target = document.querySelector(step.el);
+    if (target) {
+      target.classList.add('tut-highlight');
+      const r = target.getBoundingClientRect();
+      const p = 10;
+      Object.assign(tutSpotlight.style, {
+        left:    (r.left - p) + 'px',
+        top:     (r.top  - p) + 'px',
+        width:   (r.width  + p * 2) + 'px',
+        height:  (r.height + p * 2) + 'px',
+        opacity: '1',
+      });
+      positionTutCard(r);
+    }
+  } else {
+    tutSpotlight.style.opacity = '0';
+    positionTutCard(null);
+  }
+}
+
+function openTutorial() {
+  tutStep = 0;
+  tutOverlay.classList.add('active');
+  uiEl.classList.remove('faded');
+  uiEl.classList.add('tutorial-open');
+  btnHelp.classList.add('active');
+  showTutStep(0);
+}
+
+function closeTutorial() {
+  tutStep = -1;
+  tutOverlay.classList.remove('active');
+  uiEl.classList.remove('tutorial-open');
+  btnHelp.classList.remove('active');
+  document.querySelectorAll('.tut-highlight').forEach(e => e.classList.remove('tut-highlight'));
+}
+
+btnHelp.addEventListener('click', () => tutStep >= 0 ? closeTutorial() : openTutorial());
+tutNextBtn.addEventListener('click', () => {
+  if (tutStep === TUTORIAL_STEPS.length - 1) { closeTutorial(); return; }
+  showTutStep(++tutStep);
+});
+tutPrevBtn.addEventListener('click', () => { if (tutStep > 0) showTutStep(--tutStep); });
+tutSkipBtn.addEventListener('click', closeTutorial);
 
 // ── Template training ────────────────────────────────────────────────
 const TRAIN_BANDS = ['kick', 'snare', 'bass', 'lead', 'atmos', 'pads'];

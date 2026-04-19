@@ -47,7 +47,7 @@ fn respawn(idx: u32, seed: u32) -> Particle {
   p.band   = f32(idx % 5u);
   let bi   = idx % 5u;
   if      (bi == 0u) { p.max_life = 40.0 + rnd(seed+2u)*30.0; p.size = 0.008+rnd(seed+3u)*0.007; }
-  else if (bi == 1u) { p.max_life = 70.0 + rnd(seed+2u)*50.0; p.size = 0.004+rnd(seed+3u)*0.005; }
+  else if (bi == 1u) { p.max_life = 70.0 + rnd(seed+2u)*50.0; p.size = (0.004+rnd(seed+3u)*0.005) * clamp(u.mul_bass / 3.0, 0.15, 2.2); }
   else if (bi == 2u) { p.max_life = 50.0 + rnd(seed+2u)*40.0; p.size = 0.003+rnd(seed+3u)*0.004; }
   else if (bi == 3u) { p.max_life = 18.0 + rnd(seed+2u)*20.0; p.size = 0.001+rnd(seed+3u)*0.002; }
   else               { p.max_life = 120.0+ rnd(seed+2u)*80.0; p.size = 0.010+rnd(seed+3u)*0.010; }
@@ -137,8 +137,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
       // bass turns up the volume on it so all particles react simultaneously.
       let pdist2 = length(p.pos);
       let wave   = sin(pdist2 * 6.5 - t * 3.8);
-      f += normalize(p.pos + vec2f(0.0001)) * u.bass * u.mul_bass * wave * 11.0;
-      // Very slow ambient drift so particles don't freeze when silent
+      f += normalize(p.pos + vec2f(0.0001)) * u.bass * wave * 33.0;
       let da_r = t * 0.07 + 1.5;
       f += vec2f(cos(da_r), sin(da_r)) * 0.028;
 
@@ -150,22 +149,27 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
         let well_pos = vec2f(cos(angle) * 0.38, sin(angle) * 0.38);
         let to_well  = well_pos - p.pos;
         let dist     = max(length(to_well), 0.001);
-        let r0       = 0.11;
-        let bass_mod = 0.4 + u.bass * u.mul_bass * 0.7;
-        // Spring around r0: positive=attract, negative=repel (keeps particles orbiting, not collapsing)
-        let spring_f = (dist - r0) * bass_mod * 7.0;
+        let r0       = 0.13;
+        // Cap bass_mod so constant bass signal doesn't freeze particles at equilibrium
+        let bass_mod = 0.5 + min(u.bass * 2.1, 1.4);
+        // Softer spring — prevents too-rigid lock-in
+        let spring_f = (dist - r0) * bass_mod * 3.5;
         f += normalize(to_well) * spring_f;
-        // Tangential: orbit the well (alternating CW/CCW per particle)
+        // Strong tangential: ensures orbiting even at equilibrium
         let orb_dir = select(-1.0, 1.0, (idx % 2u) == 0u);
         let tang_w  = vec2f(-to_well.y, to_well.x) * orb_dir / dist;
-        f += tang_w * bass_mod * 1.0;
+        f += tang_w * (bass_mod * 3.5 + 0.8);
+        // Random jitter breaks perfect equilibrium and keeps wells lively
+        let jx = rnd(seed ^ (i * 997u  + 1u)) * 2.0 - 1.0;
+        let jy = rnd(seed ^ (i * 1337u + 1u)) * 2.0 - 1.0;
+        f += vec2f(jx, jy) * 0.14;
       }
 
     } else if (mode_bass == 2u) {
       // SWELL: sinusoidal flow field. No min-floor: silent = nearly still, bass = big sweeps.
-      let bass_str = u.bass * u.mul_bass;
-      let wx = cos(p.pos.y * 1.3 + t * 0.18) * bass_str * 5.5;
-      let wy = sin(p.pos.x * 1.1 + t * 0.14) * bass_str * 4.5;
+      let bass_str = u.bass;
+      let wx = cos(p.pos.y * 1.3 + t * 0.18) * bass_str * 16.5;
+      let wy = sin(p.pos.x * 1.1 + t * 0.14) * bass_str * 13.5;
       f += vec2f(wx, wy);
       // Bare minimum drift so particles don't freeze completely
       let da_sw = t * 0.05 + f32(idx % 7u) * 0.9;
@@ -174,17 +178,19 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
     } else {
       // RING: speaker-cone membrane. Ring radius = 0 when silent, expands on bass hit.
       // Whole field collapses to center between beats and explodes outward on the beat.
-      let bass_str  = u.bass * u.mul_bass;
+      let bass_str  = u.bass;
       let pdist_r   = length(p.pos);
-      let ring_r    = 0.12 + bass_str * 0.30;
-      let pull_str  = 4.5 + bass_str * 4.0;
+      let ring_r    = 0.12 + bass_str * 0.90;
+      let pull_str  = 4.5 + bass_str * 12.0;
       let ring_pull = (ring_r - pdist_r) * pull_str;
       f += normalize(p.pos + vec2f(0.0001)) * ring_pull;
-      // Orbit speed is 0 when silent, grows with bass
       let orb_dir = select(-1.0, 1.0, (idx % 2u) == 0u);
       let tangent = vec2f(-p.pos.y, p.pos.x) * orb_dir / (pdist_r + 0.001);
-      f += tangent * bass_str * 2.0;
+      f += tangent * bass_str * 6.0;
     }
+    // Anti-freeze: constant bass signals create equilibrium; this breaks it
+    let da_bass = t * 0.11 + f32(idx) * 0.0013;
+    f += vec2f(cos(da_bass), sin(da_bass)) * 0.035;
   }
 
   // ── BAND 2: LEAD SYNTH ──────────────────────────────────────────────

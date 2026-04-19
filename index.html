@@ -486,6 +486,121 @@
     }
     #btn-ripple-color:hover { opacity: 0.85; }
 
+    /* ── Reset button ───────────────────────────────────────────── */
+    #btn-reset-tune {
+      width: 100%;
+      padding: 7px;
+      font-size: 0.60rem;
+      letter-spacing: 0.12em;
+      opacity: 0.28;
+      transition: opacity 0.2s;
+      border-radius: 5px;
+    }
+    #btn-reset-tune:hover { opacity: 0.65; }
+
+    /* ── Tutorial ───────────────────────────────────────────────── */
+    #btn-help {
+      font-size: 0.78rem;
+      padding: 5px 10px;
+      opacity: 0.22;
+      transition: opacity 0.2s;
+    }
+    #btn-help:hover  { opacity: 0.65; }
+    #btn-help.active { opacity: 0.85; }
+
+    #tutorial-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.58);
+      z-index: 9000;
+    }
+    #tutorial-overlay.active { display: block; }
+
+    #tutorial-spotlight {
+      position: fixed;
+      border-radius: 10px;
+      box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.50);
+      border: 1.5px solid rgba(255, 255, 255, 0.50);
+      transition: left 0.25s ease, top 0.25s ease, width 0.25s ease, height 0.25s ease, opacity 0.2s;
+      pointer-events: none;
+      z-index: 9001;
+      opacity: 0;
+    }
+
+    .tut-highlight {
+      position: relative;
+      z-index: 9002 !important;
+      pointer-events: all !important;
+    }
+
+    #ui.tutorial-open {
+      opacity: 1 !important;
+      pointer-events: all !important;
+    }
+
+    #tutorial-card {
+      position: fixed;
+      background: rgba(8, 8, 14, 0.94);
+      border: 1px solid rgba(255, 255, 255, 0.13);
+      border-radius: 12px;
+      padding: 18px 20px;
+      width: 280px;
+      z-index: 9003;
+      backdrop-filter: blur(18px);
+      pointer-events: all;
+    }
+
+    #tutorial-counter {
+      font-size: 0.56rem;
+      letter-spacing: 0.14em;
+      opacity: 0.30;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+    }
+
+    #tutorial-title {
+      font-size: 0.82rem;
+      letter-spacing: 0.10em;
+      font-weight: 500;
+      margin-bottom: 10px;
+    }
+
+    #tutorial-text {
+      font-size: 0.70rem;
+      line-height: 1.6;
+      opacity: 0.60;
+      letter-spacing: 0.02em;
+      margin-bottom: 16px;
+      white-space: pre-line;
+    }
+
+    #tutorial-nav {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    #tutorial-nav button {
+      font-size: 0.64rem;
+      letter-spacing: 0.08em;
+      padding: 6px 14px;
+      transition: background 0.15s, opacity 0.15s;
+    }
+
+    #tutorial-next {
+      flex: 1;
+      background: rgba(255, 255, 255, 0.09);
+      border-color: rgba(255, 255, 255, 0.20);
+    }
+    #tutorial-next:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.16) !important;
+    }
+    #tutorial-prev { opacity: 0.40; }
+    #tutorial-prev:not(:disabled):hover { opacity: 0.80; }
+    #tutorial-skip { opacity: 0.28; font-size: 0.60rem !important; padding: 6px 9px !important; }
+    #tutorial-skip:hover { opacity: 0.65; }
+
     /* ── Error overlay ───────────────────────────────────────────── */
     #error {
       position: fixed;
@@ -529,6 +644,7 @@
   <button id="btn-color">COLOR</button>
   <button id="btn-train">TRAIN</button>
   <button id="btn-oscillo">SCOPE</button>
+  <button id="btn-help" title="Tutorial">?</button>
 </div>
 
 <div id="debug" class="hidden">
@@ -550,7 +666,7 @@
     <button class="btn-solo" id="solo-drums">SOLO</button>
     <select class="band-select" id="mode-drums">
       <option value="0">Burst</option>
-      <option value="1">Shockwave</option>
+      <option value="1" selected>Shockwave</option>
       <option value="2">Slam</option>
     </select>
   </div>
@@ -629,6 +745,8 @@
     <input type="range" id="sl-dissonance" min="0" max="3" step="0.05" value="1">
     <span class="tune-val" id="v-dissonance">1.00</span>
   </div>
+  <div class="tune-divider"></div>
+  <button id="btn-reset-tune">RESET DEFAULTS</button>
 </div>
 
 <div id="train" class="hidden">
@@ -655,6 +773,20 @@
 
 <button id="btn-ripple-color" title="Ripple color"></button>
 <input type="color" id="ripple-color-input" value="#00D9FF" style="display:none">
+
+<div id="tutorial-overlay">
+  <div id="tutorial-spotlight"></div>
+  <div id="tutorial-card">
+    <div id="tutorial-counter">1 / 8</div>
+    <div id="tutorial-title">Welcome to Bloom</div>
+    <div id="tutorial-text"></div>
+    <div id="tutorial-nav">
+      <button id="tutorial-prev">←</button>
+      <button id="tutorial-next">Next →</button>
+      <button id="tutorial-skip">Skip</button>
+    </div>
+  </div>
+</div>
 
 <script type="module" src="/src/main.js"></script>
 </body>

@@ -117,7 +117,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   // Opacity scale per band — pads very transparent, lead most visible
   var opacity = 0.30;
   if      (bi == 0u) { opacity = 0.50; }
-  else if (bi == 1u) { opacity = 0.35; }
+  else if (bi == 1u) { opacity = clamp(u.mul_bass * 0.115, 0.04, 0.55); }
   else if (bi == 2u) { opacity = 0.60; }
   else if (bi == 3u) { opacity = 0.45; }
   else               { opacity = 0.18; }   // pads: barely visible, texture only
