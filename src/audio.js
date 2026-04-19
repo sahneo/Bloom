@@ -53,7 +53,12 @@ export class AudioAnalyser {
     this._fileSource.buffer = buf;
     this._fileSource.loop = true;
     this._fileSource.connect(this.analyser);
-    this._fileSource.connect(this.chromaAnalyser);
+    try {
+      this._ensureChromaAnalyser();
+      this._fileSource.connect(this.chromaAnalyser);
+    } catch (e) {
+      console.warn('Chroma analyser setup failed:', e);
+    }
     this.analyser.connect(this.context.destination);
     this._connectStereo(this._fileSource);
     this._fileSource.start();
@@ -62,10 +67,15 @@ export class AudioAnalyser {
   _connectStream(stream) {
     this._ensureContext();
     this._ensureAnalyser();
-    this._ensureChromaAnalyser();
     const source = this.context.createMediaStreamSource(stream);
     source.connect(this.analyser);
-    source.connect(this.chromaAnalyser);
+    // High-res chromagram analyser — non-critical, don't let it block audio
+    try {
+      this._ensureChromaAnalyser();
+      source.connect(this.chromaAnalyser);
+    } catch (e) {
+      console.warn('Chroma analyser setup failed, falling back to main analyser:', e);
+    }
     this._connectStereo(source);
   }
 

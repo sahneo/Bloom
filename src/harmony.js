@@ -6,6 +6,24 @@
 // discrete enum, so colour transitions are always smooth.
 // ---------------------------------------------------------------------------
 
+// Plomp-Levelt dissonance per interval class (0 = unison … 11 = major 7th).
+// Symmetric: interval n has same dissonance as 12-n.
+// 0 = pure consonance, 1 = maximum dissonance.
+const DISSONANCE_TABLE = [
+  0.00,  // 0  unison
+  1.00,  // 1  minor 2nd
+  0.80,  // 2  major 2nd
+  0.35,  // 3  minor 3rd
+  0.25,  // 4  major 3rd
+  0.10,  // 5  perfect 4th
+  0.95,  // 6  tritone
+  0.05,  // 7  perfect 5th
+  0.25,  // 8  minor 6th
+  0.35,  // 9  major 6th
+  0.80,  // 10 minor 7th
+  1.00,  // 11 major 7th
+];
+
 // Krumhansl-Schmuckler key profiles (1990)
 // Weighted by how strongly each scale degree implies the key —
 // unlike binary templates these DO discriminate major from minor.
@@ -28,11 +46,28 @@ export class HarmonyAnalyzer {
     this.expiredNotes = [];       // { pitch, velocity, durationMs, endMs }
 
     // Smoothed output — updated every frame via lerp
-    this.tonality = 0;    // current display value, -1 → +1
+    this.tonality    = 0;   // current display value, -1 → +1
     this._targetTonality = 0;
-    this.pulse    = 0;    // current display value, decays to 0
-    this._silenceMs = 0;  // ms since last note-on
+    this.dissonance  = 0;   // 0 = pure consonance, 1 = maximum dissonance
+    this.pulse       = 0;   // current display value, decays to 0
+    this._silenceMs  = 0;   // ms since last note-on
     this._lastUpdateMs = performance.now();
+  }
+
+  // Dissonance score for the currently active notes (0 = pure consonance, 1 = maximum).
+  // Averages Plomp-Levelt dissonance across all note pairs.
+  _computeDissonance() {
+    const notes = [...this.activeNotes.keys()];
+    if (notes.length < 2) return 0;
+    let total = 0, count = 0;
+    for (let i = 0; i < notes.length; i++) {
+      for (let j = i + 1; j < notes.length; j++) {
+        const interval = Math.abs(notes[i] - notes[j]) % 12;
+        total += DISSONANCE_TABLE[interval];
+        count++;
+      }
+    }
+    return count > 0 ? total / count : 0;
   }
 
   // Called on MIDI note-on
@@ -124,13 +159,19 @@ export class HarmonyAnalyzer {
     const pulseDecay  = Math.pow(0.92, deltaMs / 16.67); // ~0.92 per frame at 60fps
     this.pulse *= pulseDecay;
 
+    // Dissonance: fast attack (responds immediately to note changes), slow decay
+    const rawDissonance = this._computeDissonance();
+    const dissonanceDecay = Math.pow(0.96, deltaMs / 16.67);
+    this.dissonance = Math.max(rawDissonance, this.dissonance * dissonanceDecay);
+
     // FFT energy contributes a floor to pulse (keeps shader alive on audio-only tracks)
     const displayPulse = Math.max(this.pulse, fftEnergy * 0.35);
 
     return {
-      tonality: this.tonality,
-      pulse:    displayPulse,
-      energy:   fftEnergy,
+      tonality:   this.tonality,
+      pulse:      displayPulse,
+      energy:     fftEnergy,
+      dissonance: this.dissonance,
     };
   }
 
@@ -205,7 +246,7 @@ export class HarmonyAnalyzer {
     this.pulse        *= pulseDecay;
     const displayPulse = Math.max(this.pulse, fftEnergy * 0.35);
 
-    return { tonality: this.tonality, pulse: displayPulse, energy: fftEnergy };
+    return { tonality: this.tonality, pulse: displayPulse, energy: fftEnergy, dissonance: this.dissonance };
   }
 
   // Manually override tonality (manual key selector)
