@@ -163,12 +163,17 @@ export class AudioAnalyser {
     this._startTime   = this.context.currentTime;
     this._pauseOffset = offset;
     this._isPlaying   = true;
+    // Capture reference so stale onended events from old sources are ignored.
+    // Race: pause() calls src.stop() then sets _fileSource=null; stop() queues
+    // onended asynchronously. If play() fires before onended arrives, a new source
+    // is active. The guard `_fileSource !== captured` makes the old event a no-op,
+    // preventing it from resetting _isPlaying and _pauseOffset on the new playback.
+    const captured = this._fileSource;
     this._fileSource.onended = () => {
-      // Only reset to beginning on natural end (not when we stop manually)
-      if (this._isPlaying) {
-        this._isPlaying   = false;
-        this._pauseOffset = 0;
-      }
+      if (this._fileSource !== captured) return;   // stale event — ignore
+      this._isPlaying   = false;
+      this._pauseOffset = 0;
+      this._fileSource  = null;
     };
   }
 
