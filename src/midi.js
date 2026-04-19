@@ -41,22 +41,7 @@ export class MIDIHandler {
   }
 
   _listenToAll() {
-    const allInputs = [...this._access.inputs.values()];
-    
-    // Clear old listeners first
-    for (const input of allInputs) {
-      input.onmidimessage = null;
-    }
-
-    let targetInputs = allInputs;
-    // Smart routing: Only listen to IAC driver to avoid double-triggering
-    // from physical keyboards, unless user clicked "Test" button
-    if (!this._testMode) {
-      const iacInputs = allInputs.filter(i => i.name.toLowerCase().includes('iac'));
-      if (iacInputs.length > 0) targetInputs = iacInputs;
-    }
-
-    for (const input of targetInputs) {
+    for (const input of this._access.inputs.values()) {
       input.onmidimessage = (e) => this._handleMessage(e);
     }
   }

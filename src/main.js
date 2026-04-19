@@ -2,6 +2,7 @@ import { Renderer }           from './renderer.js';
 import { AudioAnalyser }      from './audio.js';
 import { MIDIHandler }        from './midi.js';
 import { HarmonyAnalyzer }    from './harmony.js';
+import { RippleManager }      from './ripples.js';
 import { ParticlesPreset }    from './presets/particles.js';
 import { OscilloscopePreset } from './presets/oscilloscope.js';
 
@@ -17,9 +18,11 @@ const btnTune     = document.getElementById('btn-tune');
 const tunePanel   = document.getElementById('tune');
 const btnTrain    = document.getElementById('btn-train');
 const trainPanel  = document.getElementById('train');
-const btnMidi     = document.getElementById('btn-midi');
-const statusMidi  = document.getElementById('status-midi');
-const btnOscillo  = document.getElementById('btn-oscillo');
+const btnMidi          = document.getElementById('btn-midi');
+const statusMidi       = document.getElementById('status-midi');
+const btnOscillo       = document.getElementById('btn-oscillo');
+const btnRippleColor   = document.getElementById('btn-ripple-color');
+const rippleColorInput = document.getElementById('ripple-color-input');
 
 function resize() {
   const dpr = Math.min(devicePixelRatio, 1.5);
@@ -128,8 +131,10 @@ const params = {
   mulSb: 1, mulBass: 3, mulMid: 1, mulHigh: 1, spring: 0.3,
   modeDrums: 0, modeBass: 0, modeLead: 0, modeAtmos: 0, modePads: 0,
   colorMode: 0,
-  tonality: 0,   // -1 minor → +1 major (from HarmonyAnalyzer)
-  pulse: 0,      // 0→1 note-attack flash (from HarmonyAnalyzer)
+  tonality:   0,   // -1 minor → +1 major (from HarmonyAnalyzer)
+  pulse:      0,   // 0→1 note-attack flash (from HarmonyAnalyzer)
+  dissonance:         0,   // 0 consonant → 1 dissonant (from HarmonyAnalyzer)
+  dissonanceStrength: 1,   // user-controlled multiplier for the dissonance visual effect
 };
 
 function bindSlider(id, valId, key) {
@@ -144,7 +149,8 @@ bindSlider('sl-sb',     'v-sb',     'mulSb');
 bindSlider('sl-bass',   'v-bass',   'mulBass');
 bindSlider('sl-mid',    'v-mid',    'mulMid');
 bindSlider('sl-high',   'v-high',   'mulHigh');
-bindSlider('sl-spring', 'v-spring', 'spring');
+bindSlider('sl-spring',      'v-spring',      'spring');
+bindSlider('sl-dissonance',  'v-dissonance',  'dissonanceStrength');
 
 btnTune.addEventListener('click', () => {
   const hidden = tunePanel.classList.toggle('hidden');
@@ -240,10 +246,15 @@ window.addEventListener('keydown', e => {
 const renderer = new Renderer(canvas);
 const audio    = new AudioAnalyser();
 const harmony  = new HarmonyAnalyzer({ bufferMs: 3000 });
+const ripples  = new RippleManager();
 let   lastMidiMs = 0;   // timestamp of most recent MIDI note-on
 const midi     = new MIDIHandler({
-  onNoteOn:  (pitch, velocity) => { harmony.noteOn(pitch, velocity); lastMidiMs = performance.now(); },
-  onNoteOff: (pitch)           => harmony.noteOff(pitch),
+  onNoteOn:  (pitch, velocity) => {
+    harmony.noteOn(pitch, velocity);
+    ripples.spawn(pitch);
+    lastMidiMs = performance.now();
+  },
+  onNoteOff: (pitch) => harmony.noteOff(pitch),
 });
 
 // ── Preset / mode ────────────────────────────────────────────────────
@@ -291,6 +302,17 @@ async function init() {
     }
   });
 
+  btnRippleColor.addEventListener('click', () => rippleColorInput.click());
+  rippleColorInput.addEventListener('input', e => {
+    const hex = e.target.value;
+    ripples.setColor(hex);
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    btnRippleColor.style.background  = `rgba(${r},${g},${b},0.2)`;
+    btnRippleColor.style.borderColor = `rgba(${r},${g},${b},0.5)`;
+  });
+
   btnSystem.addEventListener('click', async () => {
     try { await audio.connectSystemAudio(); onConnected('system'); }
     catch (e) { console.error('System audio:', e); }
@@ -321,8 +343,12 @@ async function init() {
     const harm = (lastMidiMs > 0 && midiSilentMs < 8000)
       ? harmony.update(fftEnergy)
       : harmony.updateFromChroma(audio.chromagram, fftEnergy);
-    params.tonality = harm.tonality;
-    params.pulse    = harm.pulse;
+    params.tonality   = harm.tonality;
+    params.pulse      = harm.pulse;
+    params.dissonance = harm.dissonance;
+
+    params.rippleData = ripples.getUniforms();
+    ripples.update();
 
     updateDebug(bands, harm);
 

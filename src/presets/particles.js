@@ -23,9 +23,9 @@ export class ParticlesPreset {
     const computeModule = device.createShaderModule({ label: 'particles-compute', code: computeSource });
     const renderModule  = device.createShaderModule({ label: 'particles-render',  code: renderSource  });
 
-    // Uniform buffer: 24 × f32 = 96 bytes
+    // Uniform buffer: 28 × f32 base (112 bytes) + 64 × f32 ripple data (256 bytes) = 368 bytes
     this.uniformBuffer = device.createBuffer({
-      size: 96,
+      size: 368,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
@@ -111,8 +111,16 @@ export class ParticlesPreset {
       params.colorMode  ?? 0,  // color_mode
       params.tonality   ?? 0,  // tonality: -1 minor → +1 major
       params.pulse      ?? 0,  // pulse: MIDI note-attack flash
+      params.dissonance         ?? 0,  // dissonance: 0 consonant → 1 dissonant
+      params.dissonanceStrength ?? 1,  // user multiplier for dissonance effect
+      0, 0,                            // padding to align to 112 bytes
     ]);
     this.device.queue.writeBuffer(this.uniformBuffer, 0, u);
+
+    // Ripple data at offset 112: 8 × vec4f pos_age + 8 × vec4f color = 256 bytes
+    if (params.rippleData) {
+      this.device.queue.writeBuffer(this.uniformBuffer, 112, params.rippleData);
+    }
   }
 
   tick(device, bands, timeMs, deltaMs, params) {

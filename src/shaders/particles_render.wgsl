@@ -5,6 +5,9 @@ struct Uniforms {
   mul_high:   f32, spring:      f32, kick:       f32, snare:      f32,
   mode_drums: f32, mode_bass:   f32, mode_lead:  f32, mode_atmos: f32,
   mode_pads:  f32, color_mode:  f32, tonality:   f32, pulse:       f32,
+  dissonance: f32, dis_strength: f32, _p2:         f32, _p3:        f32,
+  ripple_pos_age: array<vec4f, 8>,
+  ripple_color:   array<vec4f, 8>,
 }
 
 struct Particle {
@@ -20,11 +23,12 @@ struct Particle {
 @group(0) @binding(1) var<storage, read> particles: array<Particle>;
 
 struct VSOut {
-  @builtin(position) pos:   vec4f,
-  @location(0)       local: vec2f,
-  @location(1)       life:  f32,
-  @location(2)       band:  f32,
-  @location(3)       speed: f32,
+  @builtin(position) pos:       vec4f,
+  @location(0)       local:     vec2f,
+  @location(1)       life:      f32,
+  @location(2)       band:      f32,
+  @location(3)       speed:     f32,
+  @location(4)       world_pos: vec2f,
 }
 
 @vertex
@@ -51,13 +55,30 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VSOut {
     offset = c * p.size;
   }
 
-  let clip = vec2f((p.pos.x + offset.x) / aspect, p.pos.y + offset.y);
-  return VSOut(vec4f(clip, 0.0, 1.0), c, p.life, p.band, spd);
+  // Dissonance: each particle shakes at a unique phase — strong enough to see at field level
+  let pi_f   = f32(pi);
+  let dis    = u.dissonance * u.dis_strength;
+  let jitter = dis * 0.055 * vec2f(
+    sin(u.time * 11.0 + pi_f * 0.37) + 0.4 * sin(u.time * 19.0 + pi_f * 0.71),
+    cos(u.time *  8.0 + pi_f * 0.53) + 0.4 * cos(u.time * 23.0 + pi_f * 0.91),
+  );
+  let clip = vec2f((p.pos.x + offset.x + jitter.x) / aspect, p.pos.y + offset.y + jitter.y);
+  return VSOut(vec4f(clip, 0.0, 1.0), c, p.life, p.band, spd, p.pos);
 }
 
 @fragment
 fn fs_main(in: VSOut) -> @location(0) vec4f {
-  let d  = length(in.local);
+  // Dissonance warps the particle boundary into an irregular, animated shape.
+  // Consonance → clean circles; dissonance → jagged, unstable edges.
+  let angle = atan2(in.local.y, in.local.x);
+  let t     = u.time;
+  let dis   = u.dissonance * u.dis_strength;
+  let warp  = dis * (
+    0.50 * sin(angle * 2.0 + t * 3.10) +
+    0.35 * sin(angle * 3.0 - t * 2.30) +
+    0.22 * sin(angle * 5.0 + t * 1.73)
+  );
+  let d = length(in.local) * (1.0 + warp);
   if (d > 1.0) { discard; }
 
   let bi = u32(in.band + 0.5);
@@ -102,7 +123,9 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   else               { opacity = 0.18; }   // pads: barely visible, texture only
 
   let alpha = in.life * edge;
-  let bright = (base + core) * alpha * opacity;
+  // Dissonance flicker: rapid per-particle brightness instability
+  let flicker = 1.0 + dis * 0.7 * sin(u.time * 31.0 + in.band * 4.3 + in.speed * 17.0);
+  let bright = (base + core) * alpha * opacity * max(flicker, 0.0);
 
   // Tonality color: -1=minor(cool blues/purples), 0=neutral, +1=major(warm ambers)
   let cool_hue    = vec3f(0.28, 0.42, 1.00);   // blue-violet for minor
@@ -133,6 +156,25 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
     rgb = tone_rgb;
   }
 
-  let c = rgb * (bright + pulse_boost * alpha);
+  // Ripple color tint — particles on the wave front take on the ripple color
+  var rwave_sum: f32   = 0.0;
+  var rcol_sum:  vec3f = vec3f(0.0);
+  for (var ri = 0u; ri < 8u; ri++) {
+    let rpa   = u.ripple_pos_age[ri];
+    if (rpa.z < 0.0) { continue; }
+    let dist  = length(in.world_pos - rpa.xy);
+    let dring = (dist - rpa.z * 0.55) / 0.15;
+    let env   = exp(-rpa.z * 2.0) * max(0.0, 1.0 - rpa.z / 2.5);
+    let wave  = exp(-dring * dring) * env;
+    rwave_sum += wave;
+    rcol_sum  += u.ripple_color[ri].rgb * wave;
+  }
+  let tint = clamp(rwave_sum, 0.0, 1.0);
+
+  var c = rgb * (bright + pulse_boost * alpha);
+  if (tint > 0.02) {
+    let avg_col = rcol_sum / (rwave_sum + 0.001);
+    c = mix(c, avg_col * (bright * 1.6 + 0.03 * alpha), tint * 0.70);
+  }
   return vec4f(c, bright + pulse_boost * alpha);
 }

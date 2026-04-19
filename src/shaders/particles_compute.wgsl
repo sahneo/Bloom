@@ -10,7 +10,13 @@ struct Uniforms {
   // row 4 — per-band visualization mode (0, 1, 2, ...)
   mode_drums: f32, mode_bass:   f32, mode_lead: f32, mode_atmos: f32,
   // row 5
-  mode_pads:  f32, color_mode:  f32, tonality:  f32, pulse:    f32,
+  mode_pads:  f32, color_mode:  f32, tonality:  f32, pulse:      f32,
+  // row 6
+  dissonance: f32, dis_strength: f32, _p2:       f32, _p3:        f32,
+  // rows 7-14: ripple data — (x, y, age_sec, _) per slot; age<0 = inactive
+  ripple_pos_age: array<vec4f, 8>,
+  // rows 15-22: ripple colors — (r, g, b, _)
+  ripple_color:   array<vec4f, 8>,
 }
 
 struct Particle {
@@ -291,6 +297,20 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
     // Base slow drift for all pad modes
     let da5 = t * 0.04 + f32(idx) * 0.0005;
     f += vec2f(cos(da5), sin(da5)) * 0.016;
+  }
+
+  // Ripple wave forces — one expanding ring per MIDI note hit
+  for (var ri = 0u; ri < 8u; ri++) {
+    let rpa   = u.ripple_pos_age[ri];
+    let r_age = rpa.z;
+    if (r_age < 0.0) { continue; }
+    let to_p   = p.pos - rpa.xy;
+    let dist   = length(to_p) + 0.001;
+    let ring_r = r_age * 0.55;
+    let dring  = (dist - ring_r) / 0.15;
+    let env    = exp(-r_age * 2.0) * max(0.0, 1.0 - r_age / 2.5);
+    let wave   = exp(-dring * dring) * env;
+    f += normalize(to_p) * wave * 20.0;
   }
 
   // Ambient drift when fully silent — all bands stay alive
