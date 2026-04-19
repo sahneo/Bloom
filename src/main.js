@@ -5,6 +5,13 @@ import { HarmonyAnalyzer }    from './harmony.js';
 import { RippleManager }      from './ripples.js';
 import { ParticlesPreset }    from './presets/particles.js';
 import { OscilloscopePreset } from './presets/oscilloscope.js';
+import posthog from 'posthog-js';
+
+posthog.init('VITE_POSTHOG_KEY_REDACTED', {
+  api_host: 'https://us.i.posthog.com',
+  autocapture: false,
+});
+const _sessionStart = Date.now();
 
 const canvas      = document.getElementById('canvas');
 const errorEl     = document.getElementById('error');
@@ -69,14 +76,19 @@ const modeParamKey = { drums: 'modeDrums', bass: 'modeBass', lead: 'modeLead', a
 BANDS.forEach(k => {
   document.getElementById(`tog-${k}`).addEventListener('change', e => {
     bandState[k].enabled = e.target.checked;
+    posthog.capture('band_muted', { band: k, muted: !e.target.checked });
     updateBandUI();
   });
   document.getElementById(`solo-${k}`).addEventListener('click', () => {
     bandState[k].solo = !bandState[k].solo;
+    posthog.capture('band_soloed', { band: k, soloed: bandState[k].solo });
     updateBandUI();
   });
   const sel = document.getElementById(`mode-${k}`);
-  if (sel) sel.addEventListener('change', () => { params[modeParamKey[k]] = parseInt(sel.value); });
+  if (sel) sel.addEventListener('change', () => {
+    params[modeParamKey[k]] = parseInt(sel.value);
+    posthog.capture('band_mode_changed', { band: k, mode: sel.value, mode_name: sel.options[sel.selectedIndex]?.text });
+  });
 });
 
 // ── Debug overlay ───────────────────────────────────────────────────
@@ -92,6 +104,7 @@ btnDebug.addEventListener('click', () => {
 btnColor.addEventListener('click', () => {
   params.colorMode = params.colorMode > 0.5 ? 0 : 1;
   btnColor.classList.toggle('active', params.colorMode > 0.5);
+  posthog.capture('color_mode_toggled', { on: params.colorMode > 0.5 });
 });
 
 const DB_BANDS = [
@@ -156,6 +169,7 @@ btnTune.addEventListener('click', () => {
   const hidden = tunePanel.classList.toggle('hidden');
   btnTune.classList.toggle('active', !hidden);
   btnTune.style.bottom = hidden ? '20px' : (tunePanel.offsetHeight + 32) + 'px';
+  posthog.capture('tune_panel_toggled', { open: !hidden });
 });
 
 // ── Reset to defaults ────────────────────────────────────────────────
@@ -270,13 +284,24 @@ function closeTutorial() {
   document.querySelectorAll('.tut-highlight').forEach(e => e.classList.remove('tut-highlight'));
 }
 
-btnHelp.addEventListener('click', () => tutStep >= 0 ? closeTutorial() : openTutorial());
+btnHelp.addEventListener('click', () => {
+  if (tutStep >= 0) { closeTutorial(); posthog.capture('tutorial_closed', { step: tutStep }); }
+  else { openTutorial(); posthog.capture('tutorial_opened'); }
+});
 tutNextBtn.addEventListener('click', () => {
-  if (tutStep === TUTORIAL_STEPS.length - 1) { closeTutorial(); return; }
+  if (tutStep === TUTORIAL_STEPS.length - 1) {
+    closeTutorial();
+    posthog.capture('tutorial_completed');
+    return;
+  }
   showTutStep(++tutStep);
+  posthog.capture('tutorial_step', { step: tutStep, title: TUTORIAL_STEPS[tutStep].title });
 });
 tutPrevBtn.addEventListener('click', () => { if (tutStep > 0) showTutStep(--tutStep); });
-tutSkipBtn.addEventListener('click', closeTutorial);
+tutSkipBtn.addEventListener('click', () => {
+  posthog.capture('tutorial_skipped', { step: tutStep });
+  closeTutorial();
+});
 
 // ── Template training ────────────────────────────────────────────────
 const TRAIN_BANDS = ['kick', 'snare', 'bass', 'lead', 'atmos', 'pads'];
@@ -320,6 +345,7 @@ btnTrain.addEventListener('click', () => {
   const hidden = trainPanel.classList.toggle('hidden');
   btnTrain.classList.toggle('active', !hidden);
   if (hidden) { trainTarget = null; audio.startTap(null); }
+  posthog.capture('train_panel_toggled', { open: !hidden });
   updateTrainUI();
 });
 
@@ -338,11 +364,15 @@ document.getElementById('train-tap').addEventListener('click', () => {
 });
 
 document.getElementById('train-save').addEventListener('click', () => {
-  if (audio.commitTemplate()) updateTrainUI();
+  if (audio.commitTemplate()) {
+    posthog.capture('template_saved', { band: trainTarget });
+    updateTrainUI();
+  }
 });
 
 document.getElementById('train-clear').addEventListener('click', () => {
   if (!trainTarget) return;
+  posthog.capture('template_cleared', { band: trainTarget });
   audio.clearTemplate(trainTarget);
   audio.startTap(trainTarget);
   updateTrainUI();
@@ -406,6 +436,7 @@ async function init() {
       await renderer.loadPreset(OscilloscopePreset);
       btnOscillo.classList.add('active');
     }
+    posthog.capture('oscilloscope_toggled', { mode: currentMode });
   });
 
   btnMidi.addEventListener('click', async () => {
@@ -414,6 +445,7 @@ async function init() {
       statusMidi.textContent = `MIDI: ${inputs.length ? inputs.join(', ') : 'connected'}`;
       statusMidi.classList.add('active');
       btnMidi.classList.add('active');
+      posthog.capture('midi_connected', { input_count: inputs.length });
     } catch (e) {
       statusMidi.textContent = 'MIDI: ' + e.message;
       statusMidi.classList.add('error');
@@ -433,12 +465,12 @@ async function init() {
   });
 
   btnSystem.addEventListener('click', async () => {
-    try { await audio.connectSystemAudio(); onConnected('system'); }
+    try { await audio.connectSystemAudio(); onConnected('system'); posthog.capture('audio_connected', { source: 'system' }); }
     catch (e) { console.error('System audio:', e); }
   });
 
   btnMic.addEventListener('click', async () => {
-    try { await audio.connectMicrophone(); onConnected('microphone'); }
+    try { await audio.connectMicrophone(); onConnected('microphone'); posthog.capture('audio_connected', { source: 'microphone' }); }
     catch (e) { console.error('Mic:', e); }
   });
 
@@ -451,6 +483,7 @@ async function init() {
       await audio.connectFile(file);
       onConnected(file.name);
       showTransport(file.name);
+      posthog.capture('audio_connected', { source: 'file', file_type: file.type, file_size_mb: (file.size / 1048576).toFixed(1) });
     } catch (err) { console.error('File:', err); }
   });
 
@@ -504,10 +537,13 @@ async function init() {
     if (!audio.isPlaying && t >= dur - 0.05 && dur > 0) {
       audio.seek(0);
       audio.play();
+      posthog.capture('file_played', { restart: true });
     } else if (audio.isPlaying) {
       audio.pause();
+      posthog.capture('file_paused', { position_s: Math.round(t) });
     } else {
       audio.play();
+      posthog.capture('file_played', { position_s: Math.round(t) });
     }
     updateTransportUI();
   });
@@ -519,12 +555,15 @@ async function init() {
   });
   // 'change' fires reliably on mouseup/touchend even if pointer drifts off element
   transportScrub.addEventListener('change', () => {
-    audio.seek(parseFloat(transportScrub.value) / 100);
+    const ratio = parseFloat(transportScrub.value) / 100;
+    audio.seek(ratio);
     transportScrub._seeking = false;
+    posthog.capture('file_seeked', { position_pct: Math.round(ratio * 100) });
     updateTransportUI();
   });
 
   transportRemBtn.addEventListener('click', () => {
+    posthog.capture('file_removed');
     audio.removeFile();
     hideTransport();
     statusAudio.textContent = 'Audio: not connected';
@@ -571,8 +610,17 @@ async function init() {
   }
 
   btnRecord.addEventListener('click', () => {
-    if (_recorder && _recorder.state === 'recording') stopRecording();
-    else startRecording();
+    if (_recorder && _recorder.state === 'recording') {
+      stopRecording();
+      posthog.capture('recording_stopped');
+    } else {
+      startRecording();
+      posthog.capture('recording_started');
+    }
+  });
+
+  window.addEventListener('beforeunload', () => {
+    posthog.capture('session_end', { duration_s: Math.round((Date.now() - _sessionStart) / 1000) });
   });
 
   function frame(ts) {
