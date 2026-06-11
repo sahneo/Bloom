@@ -4,6 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Bloom</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <meta property="og:title"       content="Bloom" />
+  <meta property="og:description" content="A synesthetic MIDI visualizer — 25,000 particles react to your music in real time." />
+  <meta property="og:image"       content="/preview.png" />
+  <meta property="og:type"        content="website" />
+  <meta name="twitter:card"       content="summary_large_image" />
+  <meta name="twitter:image"      content="/preview.png" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -486,9 +493,13 @@
     }
     #btn-ripple-color:hover { opacity: 0.85; }
 
-    /* ── Reset button ───────────────────────────────────────────── */
-    #btn-reset-tune {
-      width: 100%;
+    /* ── Reset / Random buttons ─────────────────────────────────── */
+    .tune-actions {
+      display: flex;
+      gap: 6px;
+    }
+    #btn-reset-tune, #btn-random-tune {
+      flex: 1;
       padding: 7px;
       font-size: 0.60rem;
       letter-spacing: 0.12em;
@@ -496,7 +507,7 @@
       transition: opacity 0.2s;
       border-radius: 5px;
     }
-    #btn-reset-tune:hover { opacity: 0.65; }
+    #btn-reset-tune:hover, #btn-random-tune:hover { opacity: 0.65; }
 
     /* ── Tutorial ───────────────────────────────────────────────── */
     #btn-help {
@@ -728,6 +739,7 @@
   <button id="btn-color">COLOR</button>
   <button id="btn-train">TRAIN</button>
   <button id="btn-oscillo">SCOPE</button>
+  <button id="btn-ascii">ASCII</button>
   <button id="btn-help" title="Tutorial">?</button>
 </div>
 
@@ -830,7 +842,10 @@
     <span class="tune-val" id="v-dissonance">1.00</span>
   </div>
   <div class="tune-divider"></div>
-  <button id="btn-reset-tune">RESET DEFAULTS</button>
+  <div class="tune-actions">
+    <button id="btn-reset-tune">RESET</button>
+    <button id="btn-random-tune">RANDOM</button>
+  </div>
 </div>
 
 <div id="train" class="hidden">

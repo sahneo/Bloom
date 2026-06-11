@@ -5,6 +5,7 @@ import { HarmonyAnalyzer }    from './harmony.js';
 import { RippleManager }      from './ripples.js';
 import { ParticlesPreset }    from './presets/particles.js';
 import { OscilloscopePreset } from './presets/oscilloscope.js';
+import { AsciiPreset }        from './presets/ascii.js';
 import posthog from 'posthog-js';
 
 posthog.init('VITE_POSTHOG_KEY_REDACTED', {
@@ -28,6 +29,7 @@ const trainPanel  = document.getElementById('train');
 const btnMidi          = document.getElementById('btn-midi');
 const statusMidi       = document.getElementById('status-midi');
 const btnOscillo       = document.getElementById('btn-oscillo');
+const btnAscii         = document.getElementById('btn-ascii');
 const btnRippleColor   = document.getElementById('btn-ripple-color');
 const rippleColorInput = document.getElementById('ripple-color-input');
 
@@ -201,6 +203,50 @@ function resetToDefaults() {
 }
 
 document.getElementById('btn-reset-tune').addEventListener('click', resetToDefaults);
+
+function randomizeTune() {
+  const rnd = (lo, hi) => lo + Math.random() * (hi - lo);
+  const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+
+  const rand = {
+    mulSb:              rnd(0.2, 3.0),
+    mulBass:            rnd(0.5, 5.0),
+    mulMid:             rnd(0.2, 3.0),
+    mulHigh:            rnd(0.2, 3.0),
+    spring:             rnd(0.05, 1.0),
+    dissonanceStrength: rnd(0.0, 2.5),
+    modeDrums: pick([0,1,2,3]),
+    modeBass:  pick([0,1,2,3,4]),
+    modeLead:  pick([0,1,2,3]),
+    modeAtmos: pick([0,1,2,3]),
+    modePads:  pick([0,1,2]),
+  };
+
+  Object.assign(params, rand);
+
+  [
+    ['sl-sb',         'v-sb',         'mulSb'],
+    ['sl-bass',       'v-bass',       'mulBass'],
+    ['sl-mid',        'v-mid',        'mulMid'],
+    ['sl-high',       'v-high',       'mulHigh'],
+    ['sl-spring',     'v-spring',     'spring'],
+    ['sl-dissonance', 'v-dissonance', 'dissonanceStrength'],
+  ].forEach(([slId, vlId, key]) => {
+    const sl = document.getElementById(slId);
+    const vl = document.getElementById(vlId);
+    sl.value = rand[key];
+    vl.textContent = parseFloat(rand[key]).toFixed(2);
+  });
+
+  Object.entries(modeParamKey).forEach(([band, key]) => {
+    const sel = document.getElementById(`mode-${band}`);
+    if (sel) sel.value = String(rand[key] ?? 0);
+  });
+
+  posthog.capture('tune_randomized');
+}
+
+document.getElementById('btn-random-tune').addEventListener('click', randomizeTune);
 
 // ── Tutorial ─────────────────────────────────────────────────────────
 const TUTORIAL_STEPS = [
@@ -407,7 +453,7 @@ const midi     = new MIDIHandler({
 });
 
 // ── Preset / mode ────────────────────────────────────────────────────
-let currentMode = 'particles';  // 'particles' | 'oscilloscope'
+let currentMode = 'particles';  // 'particles' | 'oscilloscope' | 'ascii'
 
 function onConnected(label) {
   statusAudio.textContent = `Audio: ${label}`;
@@ -425,19 +471,19 @@ async function init() {
     return;
   }
 
-  // Mode switch: particles ↔ oscilloscope
-  btnOscillo.addEventListener('click', async () => {
-    if (currentMode === 'oscilloscope') {
-      currentMode = 'particles';
-      await renderer.loadPreset(ParticlesPreset);
-      btnOscillo.classList.remove('active');
-    } else {
-      currentMode = 'oscilloscope';
-      await renderer.loadPreset(OscilloscopePreset);
-      btnOscillo.classList.add('active');
-    }
-    posthog.capture('oscilloscope_toggled', { mode: currentMode });
-  });
+  // Mode switch: particles ↔ oscilloscope ↔ ascii
+  const MODES = { particles: ParticlesPreset, oscilloscope: OscilloscopePreset, ascii: AsciiPreset };
+
+  async function setMode(mode) {
+    currentMode = mode;
+    await renderer.loadPreset(MODES[mode]);
+    btnOscillo.classList.toggle('active', mode === 'oscilloscope');
+    btnAscii.classList.toggle('active',   mode === 'ascii');
+    posthog.capture('mode_changed', { mode });
+  }
+
+  btnOscillo.addEventListener('click', () => setMode(currentMode === 'oscilloscope' ? 'particles' : 'oscilloscope'));
+  btnAscii.addEventListener('click',   () => setMode(currentMode === 'ascii'        ? 'particles' : 'ascii'));
 
   btnMidi.addEventListener('click', async () => {
     try {
