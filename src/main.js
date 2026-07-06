@@ -3,6 +3,7 @@ import { AudioAnalyser }      from './audio.js';
 import { MIDIHandler }        from './midi.js';
 import { HarmonyAnalyzer }    from './harmony.js';
 import { RippleManager }      from './ripples.js';
+import { BeatTracker }        from './beat.js';
 import { ParticlesPreset }    from './presets/particles.js';
 import { OscilloscopePreset } from './presets/oscilloscope.js';
 import { AsciiPreset }        from './presets/ascii.js';
@@ -108,6 +109,33 @@ btnColor.addEventListener('click', () => {
   btnColor.classList.toggle('active', params.colorMode > 0.5);
   posthog.capture('color_mode_toggled', { on: params.colorMode > 0.5 });
 });
+
+// ── BPM tracker + metronome widget ──────────────────────────────────
+const beat       = new BeatTracker();
+const btnBpm     = document.getElementById('btn-bpm');
+const bpmWidget  = document.getElementById('bpm-widget');
+const bpmValue   = document.getElementById('bpm-value');
+const bpmConf    = document.getElementById('bpm-conf');
+const bpmBeat    = document.getElementById('bpm-beat');
+const bpmBarDots = [...document.querySelectorAll('#bpm-bar span')];
+
+btnBpm.addEventListener('click', () => {
+  const hidden = bpmWidget.classList.toggle('hidden');
+  btnBpm.classList.toggle('active', !hidden);
+  posthog.capture('bpm_widget_toggled', { on: !hidden });
+});
+
+function updateBpmWidget() {
+  const locked = beat.conf > 0.15;
+  bpmValue.textContent = locked ? Math.round(beat.bpm) + '' : '--';
+  bpmConf.textContent  = 'conf ' + beat.conf.toFixed(2);
+  // dot flashes ON the predicted beat, decays over the first 40% of it
+  const phase = beat.beatT % 1;
+  const flash = Math.pow(Math.max(0, 1 - phase * 2.5), 2) * Math.min(1, beat.conf * 2);
+  bpmBeat.style.opacity = (0.08 + 0.92 * flash).toFixed(3);
+  const barPos = Math.floor(beat.barPos());
+  bpmBarDots.forEach((d, i) => d.classList.toggle('on', locked && i === barPos));
+}
 
 const DB_BANDS = [
   { key: 'kick',    label: 'KICK',  color: '#ff4444' },
@@ -669,8 +697,20 @@ async function init() {
     posthog.capture('session_end', { duration_s: Math.round((Date.now() - _sessionStart) / 1000) });
   });
 
+  let lastFrameTs = 0;
   function frame(ts) {
-    const bands = applyBandMutes(audio.update());
+    const dtS = Math.min(ts - (lastFrameTs || ts), 50) / 1000;
+    lastFrameTs = ts;
+
+    const rawBands = audio.update();
+    const bands = applyBandMutes(rawBands);
+
+    // Beat tracking on unmuted kick+snare+high (band mutes shouldn't kill tempo)
+    beat.update(ts / 1000, rawBands.kick, rawBands.snare, rawBands.high, dtS);
+    params.beatT    = beat.beatT;
+    params.beatConf = beat.conf;
+    params.barPos   = beat.barPos();
+    if (!bpmWidget.classList.contains('hidden')) updateBpmWidget();
 
     // Harmony: MIDI drives tonality when active; audio chromagram as fallback
     const fftEnergy    = (bands.bass + bands.mid + bands.high) / 3;

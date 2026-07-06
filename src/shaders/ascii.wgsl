@@ -10,8 +10,10 @@ struct Uniforms {
   sil_index: f32,   reveal: f32,   seed_a: f32,      atlas_rows: f32,
   sil_uv: vec4f,                       // region offset.xy + scale.zw in atlas UV
   bass: f32,        mid: f32,      high: f32,        sub_bass: f32,
-  kick: f32,        snare: f32,    _p0: f32,         pulse: f32,
-  dissonance: f32,  tonality: f32, seed_b: f32,      _p2: f32,
+  kick: f32,        snare: f32,    beat_t: f32,      pulse: f32,
+  dissonance: f32,  tonality: f32, seed_b: f32,      beat_conf: f32,
+  anim: vec4f,                         // walker_x, bird_x, bird_y, bird_frame (<0 = hidden)
+  anim2: vec4f,                        // walker_frame, _, _, _
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -22,9 +24,14 @@ struct Uniforms {
 // Glyph cell size in the atlas, must match GLYPH_W/GLYPH_H in ascii.js
 const GLYPH_PX = vec2f(16.0, 32.0);
 
-// Scenery art lives in the spare regions of the silhouette atlas (4×2 grid)
-const PALM_UV = vec4f(0.5,  0.5, 0.25, 0.5);   // region 6
-const CAR_UV  = vec4f(0.75, 0.5, 0.25, 0.5);   // region 7
+// Scenery / sprite art lives in regions of the silhouette atlas (4×3 grid)
+const REG_V    = 0.3333333;
+const PALM_UV  = vec4f(0.5,  REG_V,       0.25, REG_V);   // region 6
+const CAR_UV   = vec4f(0.75, REG_V,       0.25, REG_V);   // region 7
+const BIRD_A_UV = vec4f(0.25, REG_V * 2.0, 0.25, REG_V);  // region 9 (wings up)
+const BIRD_B_UV = vec4f(0.5,  REG_V * 2.0, 0.25, REG_V);  // region 10 (wings down)
+const WALK_A_UV = vec4f(0.0,  REG_V,       0.25, REG_V);  // region 4 (stride)
+const WALK_B_UV = vec4f(0.0,  REG_V * 2.0, 0.25, REG_V);  // region 8 (legs passing)
 
 // ── Hash / noise ─────────────────────────────────────────────────────
 // Integer hash (no sin — sin-based hashes show banding on Apple GPUs).
@@ -88,7 +95,8 @@ fn scene_clouds(p: vec2f, t: f32, seed: f32) -> f32 {
 }
 
 fn scene_waves(p: vec2f, t: f32, seed: f32) -> f32 {
-  let level = -0.06 + u.bass * 0.28;
+  // sea level: bass swell + a gentle breath locked to the beat
+  let level = -0.06 + u.bass * 0.28 + u.beat_conf * 0.04 * sin(6.2832 * u.beat_t);
   let n = fbm(vec2f(p.x * 1.6 + t * 1.2 + seed, p.y * 5.0 + t * 0.2));
   let ripple = sin(p.x * 9.0 - t * 5.0 + p.y * 24.0) * (0.035 + u.kick * 0.05);
   let surf = level + (n - 0.5) * (0.28 + u.mid * 0.2) + ripple;
@@ -307,8 +315,9 @@ fn scene_invaders(p: vec2f, t: f32, seed: f32) -> f32 {
   var d = 0.0;
   // faint stars
   d = max(d, step(0.992, hash21(floor(p * 40.0 + seed))) * 0.35);
-  // march clock from scroll → tempo follows the music
-  let step8 = floor(t * 6.0);
+  // march clock: locked to detected beats when confident, else scroll
+  var step8 = floor(t * 6.0);
+  if (u.beat_conf > 0.5) { step8 = floor(u.beat_t); }
   let frame = u32(step8) % 2u;
   let zig = abs(f32(i32(step8) % 12 - 6));
   let off_x = (zig - 3.0) * 0.045;
@@ -337,6 +346,109 @@ fn scene_invaders(p: vec2f, t: f32, seed: f32) -> f32 {
   return clamp(d, 0.0, 1.0);
 }
 
+fn scene_rim(p: vec2f, t: f32, seed: f32) -> f32 {
+  var d = 0.0;
+  let r = length(p);
+  let ang = atan2(p.y, p.x);
+  // spin locked to the beat: 144° per beat (×5 spokes → full visual cycle
+  // every 5 beats); falls back to scroll-driven spin without a beat lock
+  var rot = t * 2.0;
+  if (u.beat_conf > 0.4) { rot = u.beat_t * 2.513; }
+  let a = ang + rot;
+
+  // tire: dark body, bright rotating tread blocks on the outer edge only
+  let tire = smoothstep(0.46, 0.445, r) * smoothstep(0.30, 0.315, r);
+  d = max(d, tire * 0.10);
+  d = max(d, smoothstep(0.46, 0.43, r) * step(0.415, r) * step(0.55, fract(a * 3.82)) * 0.55);
+  d = max(d, smoothstep(0.010, 0.0, abs(r - 0.455)) * 0.6);
+
+  // chrome rim lip — double bright ring
+  d = max(d, smoothstep(0.020, 0.0, abs(r - 0.30)) * 0.95);
+  d = max(d, smoothstep(0.012, 0.0, abs(r - 0.27)) * 0.5);
+
+  // 5 twin chrome spokes on a near-black interior, brighter on kick
+  let spoke = pow(abs(sin(a * 2.5)), 6.0);
+  let in_spoke = smoothstep(0.30, 0.28, r) * smoothstep(0.055, 0.075, r);
+  d = max(d, in_spoke * spoke * (0.85 + u.kick * 0.3));
+
+  // hub cap + 5 lug bolts
+  d = max(d, smoothstep(0.060, 0.045, r) * 0.9);
+  let bolt = pow(abs(sin(a * 2.5 + 0.628)), 40.0);
+  d = max(d, smoothstep(0.10, 0.085, r) * smoothstep(0.06, 0.075, r) * bolt * 0.9);
+
+  // fixed specular glint — stays put while the wheel spins (chrome!)
+  let glint = pow(max(0.0, cos(ang - 0.7)), 30.0);
+  d += smoothstep(0.32, 0.24, r) * step(0.075, r) * glint * 0.3;
+
+  // speed lines flying past, outside the wheel
+  let row = floor(p.y * 26.0 + seed);
+  let rh = hash21(vec2f(row, seed));
+  let sx = p.x * (0.9 + rh) + t * (7.0 + rh * 5.0);
+  let streak = step(hash21(vec2f(row, floor(sx))), 0.10 + u.high * 0.2)
+             * smoothstep(0.5, 0.0, fract(sx)) * step(0.49, r);
+  d = max(d, streak * 0.35);
+
+  // road rushing underneath
+  d = max(d, step(p.y, -0.47) * (0.15 + fbm(vec2f(p.x * 5.0 + t * 6.0, p.y * 10.0)) * 0.2));
+
+  return clamp(d, 0.0, 1.0);
+}
+
+fn scene_walker(p: vec2f, t: f32, seed: f32) -> f32 {
+  var d = 0.0;
+  // sparse stars + drifting fog
+  d = max(d, step(0.994, hash21(floor(p * 38.0 + seed))) * 0.5);
+  d = max(d, smoothstep(0.55, 0.95, fbm(p * 1.5 + vec2f(t * 0.25 + seed, 0.0))) * 0.16);
+  // moon
+  d = max(d, (1.0 - smoothstep(0.045, 0.06, length(p - vec2f(0.55, 0.32)))) * 0.85);
+  // ground line + texture rushing past underfoot
+  d = max(d, smoothstep(0.012, 0.0, abs(p.y + 0.42)) * 0.55);
+  d = max(d, step(p.y, -0.42) * fbm(vec2f(p.x * 4.0 - t * 1.5 + seed, p.y * 9.0)) * 0.18);
+  // the walker, feet on the ground line
+  let lp = vec2f((p.x - u.anim.x) / 0.4 + 0.5, 0.5 - (p.y + 0.089) / 0.8);
+  var wuv = WALK_A_UV;
+  if (u.anim2.x > 0.5) { wuv = WALK_B_UV; }
+  d = max(d, sample_atlas(wuv, lp) * 0.95);
+  return clamp(d, 0.0, 1.0);
+}
+
+fn scene_acid(p: vec2f, t: f32, seed: f32) -> f32 {
+  var d = 0.0;
+
+  // psychedelic ring field, warped by noise, pumping outward on the beat
+  let wob = (fbm(p * 2.2 + vec2f(t * 0.4 + seed, t * 0.25)) - 0.5) * (0.35 + u.bass * 0.7);
+  let rr  = length(p) + wob;
+  let rings = abs(sin(rr * 20.0 - t * 1.5 - u.beat_t * 3.14159));
+  d = max(d, smoothstep(0.9, 1.0, rings) * (0.15 + u.mid * 0.22));
+
+  // the smiley melts: domain-warp the face coords (drips downward, grows with
+  // bass) and swell the whole face on the kick
+  let pulse = 1.0 / (1.0 + u.kick * 0.12 + u.beat_conf * 0.05 * sin(6.2832 * u.beat_t));
+  let melt = vec2f(fbm(p * 3.2 + vec2f(seed, t * 0.6)) - 0.5,
+                   fbm(p * 3.2 + vec2f(9.1, t * 0.9 + seed)) - 0.5);
+  let q = p * pulse + melt * vec2f(0.05 + u.bass * 0.10, 0.10 + u.bass * 0.22);
+  let r = length(q);
+  let R = 0.36;
+
+  // bright face outline over a dim fill so the features read
+  d = max(d, smoothstep(0.030, 0.012, abs(r - R)) * 0.95);
+  d = max(d, step(r, R - 0.012) * 0.16);
+
+  // two tall oval eyes
+  let eL = length((q - vec2f(-0.13, 0.10)) / vec2f(0.05, 0.085));
+  let eR = length((q - vec2f( 0.13, 0.10)) / vec2f(0.05, 0.085));
+  d = max(d, step(min(eL, eR), 1.0) * 0.98);
+
+  // grin: lower arc of a circle centered above the mouth, widens on the kick
+  let mc = vec2f(0.0, 0.07);
+  let mR = 0.22 + u.kick * 0.025;
+  let grin = smoothstep(0.035, 0.0, abs(length(q - mc) - mR))
+           * step(q.y, mc.y - 0.02) * step(abs(q.x), 0.21);
+  d = max(d, grin * 0.98);
+
+  return clamp(d, 0.0, 1.0);
+}
+
 fn scene_density(id: i32, p: vec2f, t: f32, seed: f32) -> f32 {
   if (id == 0)  { return scene_clouds(p, t, seed); }
   if (id == 1)  { return scene_waves(p, t, seed); }
@@ -350,7 +462,10 @@ fn scene_density(id: i32, p: vec2f, t: f32, seed: f32) -> f32 {
   if (id == 9)  { return scene_matrix(p, t, seed); }
   if (id == 10) { return scene_eye(p, t, seed); }
   if (id == 11) { return scene_storm(p, t, seed); }
-  return scene_invaders(p, t, seed);
+  if (id == 12) { return scene_invaders(p, t, seed); }
+  if (id == 13) { return scene_rim(p, t, seed); }
+  if (id == 14) { return scene_walker(p, t, seed); }
+  return scene_acid(p, t, seed);
 }
 
 // ── Pipeline ─────────────────────────────────────────────────────────
@@ -400,10 +515,20 @@ fn fs_main(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     density = max(density * mix(1.0, 0.18, u.reveal), sil);
   }
 
+  // Ambient bird crossing the screen, flapping on the beat
+  if (u.anim.w >= 0.0) {
+    let bp = vec2f((p.x - u.anim.y) / 0.26 + 0.5, 0.5 - (p.y - u.anim.z) / 0.52);
+    var buv = BIRD_A_UV;
+    if (u.anim.w > 0.5) { buv = BIRD_B_UV; }
+    density = max(density, sample_atlas(buv, bp) * 0.9);
+  }
+
   density = clamp(density, 0.0, 1.0);
 
-  // Soft global lift on kick — no spatial pattern, just a breath of brightness
-  var bright = 0.5 + 0.5 * density + u.pulse * 0.25 + u.kick * 0.3 + torn * 0.2;
+  // Soft global lift on kick — no spatial pattern, just a breath of brightness.
+  // With a confident beat, a predictive flash lands exactly ON the beat.
+  let beat_flash = u.beat_conf * 0.14 * pow(max(0.0, 1.0 - fract(u.beat_t) * 2.5), 2.0);
+  var bright = 0.5 + 0.5 * density + u.pulse * 0.25 + u.kick * 0.3 + beat_flash + torn * 0.2;
 
   // Glyph index + high-band flicker
   var idx = i32(density * (u.glyph_count - 1.0) + 0.5);
