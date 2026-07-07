@@ -19,10 +19,14 @@ export class WledSync {
     this._lastMs   = 0;
     this._inflight = false;
     this._fails    = 0;
+    this._q        = '';
   }
 
-  async start() {
-    const r    = await fetch(`${this.relay}/info`, { signal: AbortSignal.timeout(4000) });
+  // host: WLED IP/hostname, forwarded to the relay per request; empty string
+  // falls back to the relay's CLI default
+  async start(host = '') {
+    this._q = host ? `?host=${encodeURIComponent(host)}` : '';
+    const r    = await fetch(`${this.relay}/info${this._q}`, { signal: AbortSignal.timeout(4000) });
     const info = await r.json();
     if (info.error) throw new Error(info.error);
     this.leds = info.leds;
@@ -67,7 +71,7 @@ export class WledSync {
     }
 
     this._inflight = true;
-    fetch(`${this.relay}/frame`, { method: 'POST', body: out })
+    fetch(`${this.relay}/frame${this._q}`, { method: 'POST', body: out })
       .then(() => { this._fails = 0; })
       .catch(() => { if (++this._fails > 30) this.stop(); })   // relay gone → give up quietly
       .finally(() => { this._inflight = false; });

@@ -7,8 +7,11 @@
 // DDP as a realtime override: when the stream stops, it falls back to its
 // normal state (and Home Assistant control) after its realtime timeout.
 //
-// Usage:  node tools/wled-relay.mjs <wled-host>     (IP or hostname)
-//         node tools/wled-relay.mjs 192.168.1.42
+// Usage:  node tools/wled-relay.mjs                 (address set in Bloom UI)
+//         node tools/wled-relay.mjs 192.168.1.42    (fallback default address)
+//
+// The WLED address normally comes from the browser per request (?host=...),
+// typed into Bloom's WLED field; a CLI argument acts as the default.
 //
 // Zero dependencies. Endpoints:
 //   GET  /info   → { leds, name, host }   (LED count queried from WLED itself)
@@ -18,18 +21,25 @@
 import http  from 'node:http';
 import dgram from 'node:dgram';
 
-const WLED_ARG  = process.argv[2] ?? 'wled.local';
-const WLED_HOST = WLED_ARG.split(':')[0];       // UDP goes to the bare host
+const DEFAULT_HOST = process.argv[2] ?? 'wled.local';
 const DDP_PORT  = 4048;
 const HTTP_PORT = 8127;
 const CHUNK     = 1440;             // max DDP payload (480 LEDs) per packet
+
+// Per-request target from the browser (?host=ip[:port]); CLI arg is the default
+function targetOf(url) {
+  const h = url.searchParams.get('host') || DEFAULT_HOST;
+  if (!/^[a-zA-Z0-9.:\-]+$/.test(h)) return null;
+  return h;
+}
 
 const udp = dgram.createSocket('udp4');
 udp.on('error', e => console.error('UDP error:', e.message));
 let seq = 1;
 let sendErrLogged = false;
 
-function sendDDP(rgb) {
+function sendDDP(rgb, host) {
+  const udpHost = host.split(':')[0];   // UDP always goes to the bare host
   for (let off = 0; off < rgb.length; off += CHUNK) {
     const data = rgb.subarray(off, Math.min(off + CHUNK, rgb.length));
     const push = off + CHUNK >= rgb.length;
@@ -40,7 +50,7 @@ function sendDDP(rgb) {
     hdr[3] = 0x01;                      // output ID
     hdr.writeUInt32BE(off, 4);
     hdr.writeUInt16BE(data.length, 8);
-    udp.send(Buffer.concat([hdr, data]), DDP_PORT, WLED_HOST, err => {
+    udp.send(Buffer.concat([hdr, data]), DDP_PORT, udpHost, err => {
       // A dead host/DNS must not crash the relay — log once, keep serving
       if (err && !sendErrLogged) { sendErrLogged = true; console.error('UDP send failed:', err.message); }
       if (!err) sendErrLogged = false;
@@ -61,23 +71,27 @@ const HEADERS = {
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, HEADERS); return res.end(); }
 
-  if (req.method === 'GET' && req.url === '/info') {
+  const url  = new URL(req.url, 'http://localhost');
+  const host = targetOf(url);
+  if (!host) { res.writeHead(400, HEADERS); return res.end('bad host'); }
+
+  if (req.method === 'GET' && url.pathname === '/info') {
     try {
-      const r    = await fetch(`http://${WLED_ARG}/json/info`, { signal: AbortSignal.timeout(3000) });
+      const r    = await fetch(`http://${host}/json/info`, { signal: AbortSignal.timeout(3000) });
       const info = await r.json();
       res.writeHead(200, { ...HEADERS, 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ leds: info.leds.count, name: info.name, host: WLED_HOST }));
+      return res.end(JSON.stringify({ leds: info.leds.count, name: info.name, host }));
     } catch (e) {
       res.writeHead(502, { ...HEADERS, 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ error: `WLED unreachable at ${WLED_HOST}: ${e.message}` }));
+      return res.end(JSON.stringify({ error: `WLED unreachable at ${host}: ${e.message}` }));
     }
   }
 
-  if (req.method === 'POST' && req.url === '/frame') {
+  if (req.method === 'POST' && url.pathname === '/frame') {
     const chunks = [];
     req.on('data', c => chunks.push(c));
     req.on('end', () => {
-      sendDDP(Buffer.concat(chunks));
+      sendDDP(Buffer.concat(chunks), host);
       res.writeHead(200, HEADERS);
       res.end();
     });
@@ -89,6 +103,6 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(HTTP_PORT, () => {
-  console.log(`WLED relay: http://localhost:${HTTP_PORT} → ${WLED_HOST}:${DDP_PORT} (DDP)`);
-  console.log('Open Bloom and hit the WLED button.');
+  console.log(`WLED relay on http://localhost:${HTTP_PORT} — default target ${DEFAULT_HOST}:${DDP_PORT} (DDP)`);
+  console.log('Open Bloom, enter your WLED address, and hit the WLED button.');
 });

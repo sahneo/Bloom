@@ -578,8 +578,10 @@ btnVj.addEventListener('click', () => {
 });
 
 // ── WLED strip mirror (needs the local relay: node tools/wled-relay.mjs) ──
-const wled    = new WledSync(canvas);
-const btnWled = document.getElementById('btn-wled');
+const wled      = new WledSync(canvas);
+const btnWled   = document.getElementById('btn-wled');
+const wledHost  = document.getElementById('wled-host');
+wledHost.value  = localStorage.getItem('bloom-wled-host') ?? '';
 
 btnWled.addEventListener('click', async () => {
   if (wled.active) {
@@ -587,19 +589,29 @@ btnWled.addEventListener('click', async () => {
     btnWled.classList.remove('active');
     return;
   }
+  const host = wledHost.value.trim();
+  if (!host) {
+    wledHost.classList.add('bad');
+    wledHost.focus();
+    setTimeout(() => wledHost.classList.remove('bad'), 1500);
+    return;
+  }
   btnWled.textContent = '...';
   try {
-    const info = await wled.start();
+    const info = await wled.start(host);
+    localStorage.setItem('bloom-wled-host', host);
     btnWled.textContent = 'WLED';
     btnWled.classList.add('active');
     btnWled.title = `Mirroring to "${info.name}" (${info.leds} LEDs)`;
     posthog.capture('wled_connected', { leds: info.leds });
   } catch (e) {
     btnWled.textContent = 'WLED ✕';
-    btnWled.title = `Relay not reachable — run: node tools/wled-relay.mjs <wled-ip>  (${e.message})`;
-    setTimeout(() => { btnWled.textContent = 'WLED'; }, 2500);
+    wledHost.classList.add('bad');
+    btnWled.title = `Not connected — is the relay running? (node tools/wled-relay.mjs)  ${e.message}`;
+    setTimeout(() => { btnWled.textContent = 'WLED'; wledHost.classList.remove('bad'); }, 2500);
   }
 });
+wledHost.addEventListener('keydown', e => { if (e.key === 'Enter') btnWled.click(); });
 
 // Debug/test handle — lets automated tests read live analysis state
 window.__bloom = { beat, harmony, audio, params, structure, autovj, drift };

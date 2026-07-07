@@ -301,6 +301,22 @@
     }
     #genre-select:hover { opacity: 0.65; }
     #genre-select.set   { opacity: 0.85; border-color: rgba(255,255,255,0.35); }
+    #wled-host {
+      width: 106px;
+      padding: 5px 8px;
+      font-size: 0.62rem;
+      letter-spacing: 0.06em;
+      opacity: 0.22;
+      background: rgba(0,0,0,0.4);
+      color: #ccc;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 4px;
+      font-family: 'SF Mono', 'Menlo', monospace;
+      outline: none;
+      transition: opacity 0.2s, border-color 0.2s;
+    }
+    #wled-host:hover, #wled-host:focus { opacity: 0.65; }
+    #wled-host.bad { border-color: rgba(255, 100, 100, 0.6); opacity: 0.85; }
 
     /* ── Debug overlay ───────────────────────────────────────────── */
     #debug {
@@ -841,7 +857,9 @@
     <option value="ambient">AMBIENT</option>
   </select>
   <button id="btn-vj" class="active" title="Auto-VJ: rotates visual modes on musical events">VJ</button>
-  <button id="btn-wled" title="Mirror visuals to a WLED strip (needs local relay: node tools/wled-relay.mjs <wled-ip>)">WLED</button>
+  <input id="wled-host" type="text" placeholder="WLED IP" spellcheck="false"
+         title="Address of your WLED device (e.g. 192.168.1.19)">
+  <button id="btn-wled" title="Mirror visuals to a WLED strip (needs local relay: node tools/wled-relay.mjs)">WLED</button>
   <button id="btn-help" title="Tutorial">?</button>
 </div>
 
