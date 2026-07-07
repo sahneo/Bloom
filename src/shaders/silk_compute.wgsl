@@ -13,6 +13,7 @@ struct Uniforms {
   bar_pos:    f32, key_hue:     f32, key_conf:  f32, trail_gain: f32,
   tension:    f32, drop_pulse:  f32, drift_scale: f32, drift_rot: f32,
   drift_x:    f32, drift_y:     f32, scene_seed: f32, palette_mode: f32,
+  sharpness:  f32, _r1:         f32, _r2:       f32, _r3:        f32,
   ripple_pos_age: array<vec4f, 8>,
   ripple_color:   array<vec4f, 8>,
 }

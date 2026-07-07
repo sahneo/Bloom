@@ -107,11 +107,18 @@ export class FloraPreset {
     }
     this._prevBeat = beatIdx;
 
-    if (bands.kick > 0.55 && this._prevKick < 0.3) {
+    if (bands.kick > 0.4 && this._prevKick < 0.25) {
       count += 4;
       amp = Math.max(amp, bands.kick);
     }
     this._prevKick = bands.kick;
+
+    // Hats/atmosphere sprinkle small petals between beats
+    if (bands.high > 0.5 && (this._prevHigh ?? 0) < 0.3) {
+      count += 2;
+      amp = Math.max(amp, 0.35);
+    }
+    this._prevHigh = bands.high;
 
     const pulse = params.pulse ?? 0;
     if (pulse > this._prevPulse + 0.18) {   // MIDI note attack
@@ -161,7 +168,7 @@ export class FloraPreset {
     const { fade } = PostFX.trailFactors(this._params, this._dtMs);
 
     const enc = device.createCommandEncoder();
-    this.post.fadePass(enc, fade);
+    this.post.fadePass(enc, fade, this._params);
 
     const pass = enc.beginRenderPass({
       colorAttachments: [{ view: this.post.accumView, loadOp: 'load', storeOp: 'store' }],

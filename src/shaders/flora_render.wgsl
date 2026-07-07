@@ -13,6 +13,7 @@ struct Uniforms {
   bar_pos:    f32, key_hue:     f32, key_conf:  f32, trail_gain: f32,
   tension:    f32, drop_pulse:  f32, drift_scale: f32, drift_rot: f32,
   drift_x:    f32, drift_y:     f32, scene_seed: f32, palette_mode: f32,
+  sharpness:  f32, _r1:         f32, _r2:       f32, _r3:        f32,
   ripple_pos_age: array<vec4f, 8>,
   ripple_color:   array<vec4f, 8>,
 }
@@ -59,10 +60,11 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VSOut {
     env = grow * wilt;
   }
 
-  // Gentle sway, stronger while young; beat makes the whole flower pulse
-  let sway  = sin(u.time * 1.3 + seed * 0.37) * 0.10 * env;
+  // Sway rides the lead band; kick + beat pulse the whole flower hard
+  let sway  = sin(u.time * 1.3 + seed * 0.37) * (0.04 + u.mid * u.mul_mid * 0.22) * env;
   let angle = b.x + sway;
-  let beat_size = 1.0 + exp(-fract(u.beat_t) * 8.0) * u.beat_conf * 0.15;
+  let beat_size = 1.0 + exp(-fract(u.beat_t) * 8.0) * u.beat_conf * 0.18
+                + u.kick * 0.30 + u.bass * 0.12;
 
   // ── 3D: petals live at (xy, z); the camera orbits the flower — petals do
   // NOT follow it, so near ones sweep past while far ones creep (parallax)
@@ -118,13 +120,15 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   // Older petals dim and desaturate toward decay
   let decay = 1.0 - smoothstep(0.6, 1.0, in.age01) * 0.5;
 
-  let beat_flash = exp(-fract(u.beat_t) * 6.0) * u.beat_conf * 0.18;
+  let beat_flash = exp(-fract(u.beat_t) * 6.0) * u.beat_conf * 0.35;
   let struct_boost = 1.0 + u.tension * 0.20 + u.drop_pulse * 0.8;
 
   // Depth fog: petals behind the flower dim and cool, near ones glow
   let fog = mix(0.35, 1.25, smoothstep(0.6, 1.5, in.depth));
 
-  let bright = (0.30 + u.mid * 0.35 + u.bass * 0.25)
-             * (shape + vein) * decay * fog * (1.0 + beat_flash) * struct_boost * u.trail_gain;
+  // Hats shimmer petals individually; kick/snare light the whole corolla
+  let shimmer = 1.0 + u.high * 0.7 * sin(u.time * 23.0 + in.seed * 1.7);
+  let bright = (0.14 + u.mid * 0.60 + u.bass * 0.35 + u.kick * 0.45 + u.snare * 0.30)
+             * (shape + vein) * decay * fog * (1.0 + beat_flash) * shimmer * struct_boost * u.trail_gain;
   return vec4f(rgb * bright, bright);
 }

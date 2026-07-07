@@ -1,8 +1,8 @@
-// Shared uniform-buffer layout for all HDR presets (particles, silk, flora).
+// Shared uniform-buffer layout for all HDR presets (particles, silk, flora, fluid).
 // Must match the Uniforms struct in each preset's WGSL:
-//   40 × f32 base (160 bytes) + 64 × f32 ripple data at offset 160 = 416 bytes.
-export const UNIFORM_SIZE   = 416;
-export const RIPPLE_OFFSET  = 160;
+//   44 × f32 base (176 bytes) + 64 × f32 ripple data at offset 176 = 432 bytes.
+export const UNIFORM_SIZE   = 432;
+export const RIPPLE_OFFSET  = 176;
 
 export function buildUniforms(bands, timeMs, deltaMs, params, canvas, frameCount, trailGain) {
   return new Float32Array([
@@ -46,5 +46,7 @@ export function buildUniforms(bands, timeMs, deltaMs, params, canvas, frameCount
     params.driftY     ?? 0,
     params.sceneSeed  ?? 0,   // re-rolls all time-driven field layouts
     params.paletteMode ?? 0,  // palette director scheme
+    params.sharpness  ?? 0,   // timbre: 0 sine-soft → 1 saw-bright
+    0, 0, 0,                  // padding to 176 bytes
   ]);
 }

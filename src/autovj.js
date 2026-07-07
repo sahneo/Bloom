@@ -24,6 +24,8 @@ export class AutoVJ {
     this._phrasesSinceScene = 0;
     this._offTargetX = 0; this._offTargetY = 0;   // scene composition centre
     this._offX = 0;       this._offY = 0;         // smoothed
+    this._kaleidoBurstMs = 0;
+    this._kaleidoPrev    = 0;
   }
 
   setGenre(genre) {
@@ -67,6 +69,8 @@ export class AutoVJ {
     // Kaleidoscope: rare spice — a mandala every ~8th scene, never the dull 2-mirror
     const kr = Math.random();
     this.params.kaleidoK = kr < 0.88 ? 0 : kr < 0.95 ? 4 : 6;
+    // Anamorphic streaks: a rare scene flavour (~1 in 10), not a constant
+    this.params.anamorphicScene = Math.random() < 0.10 ? 0.7 : 0;
     // Composition centre: ~40% centred, else committed off-centre
     // (rule-of-thirds territory); lerped toward in update() so it glides
     if (Math.random() < 0.4) {
@@ -76,9 +80,26 @@ export class AutoVJ {
       this._offTargetX = (Math.random() < 0.5 ? -1 : 1) * (0.25 + Math.random() * 0.30);
       this._offTargetY = (Math.random() < 0.5 ? -1 : 1) * (0.10 + Math.random() * 0.20);
     }
+    // Echo feedback: mostly plain trails; sometimes the trail buffer flows
+    // inward (tunnel) or spirals. No zoom-out — it sampled past the borders
+    // and smeared edge pixels inward.
+    const er = Math.random();
+    if      (er < 0.60) { this.params.echoZoomBase = 1.0;    this.params.echoRotBase = 0; }
+    else if (er < 0.80) { this.params.echoZoomBase = 1.006;  this.params.echoRotBase = 0; }
+    else if (er < 0.90) { this.params.echoZoomBase = 1.0025; this.params.echoRotBase = 0; }
+    else                { this.params.echoZoomBase = 1.003;  this.params.echoRotBase = 0.0028 * (Math.random() < 0.5 ? -1 : 1); }
   }
 
-  update(st) {
+  update(st, dtS = 0.0167) {
+    // Drop-flavour decays run even when AutoVJ is toggled off mid-effect
+    this.params.dropFlash  = (this.params.dropFlash  ?? 0) * Math.exp(-dtS * 7);
+    this.params.dropInvert = (this.params.dropInvert ?? 0) * Math.exp(-dtS * 3.5);
+    this.params.zoomPunch  = (this.params.zoomPunch  ?? 0) * Math.exp(-dtS * 3);
+    if (this._kaleidoBurstMs > 0) {
+      this._kaleidoBurstMs -= dtS * 1000;
+      if (this._kaleidoBurstMs <= 0) this.params.kaleidoK = this._kaleidoPrev ?? 0;
+    }
+
     if (!this.enabled) { this._trailBias *= 0.98; this.params.trailBias = this._trailBias; return; }
 
     if (st.onPhrase) {
@@ -93,6 +114,19 @@ export class AutoVJ {
       this._newScene();
       const n = 2 + (Math.random() < 0.5 ? 1 : 0);
       for (let i = 0; i < n; i++) this._rotateOne();
+
+      // Drop flavour deck — the physics shockwave always fires (dropPulse),
+      // but the visual garnish varies so drops stay surprising
+      const fx = Math.random();
+      if      (fx < 0.35) { /* pure shockwave */ }
+      else if (fx < 0.55) { this.params.dropFlash = 0.85; }
+      else if (fx < 0.72) { this.params.dropInvert = 1; }
+      else if (fx < 0.88) {
+        this._kaleidoBurstMs = 1800;
+        this._kaleidoPrev    = this.params.kaleidoK;
+        this.params.kaleidoK = Math.random() < 0.5 ? 4 : 6;
+      }
+      else { this.params.zoomPunch = 1; }
     }
 
     // Trail bias by section: breakdowns float (long trails), builds tighten

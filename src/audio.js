@@ -11,6 +11,7 @@ export class AudioAnalyser {
     this.dataArray = null;
     this.ranges = { ...DEFAULT_RANGES };
     this.bands = { subBass: 0, bass: 0, mid: 0, high: 0, kick: 0, snare: 0 };
+    this.sharpness = 0;   // 0 = sine-soft timbre, 1 = saw-bright (spectral centroid)
     this._smoothed = { subBass: 0, bass: 0, mid: 0, high: 0 };
     this._maxEnergy = 0.001;
     this._fileSource = null;
@@ -318,6 +319,30 @@ export class AudioAnalyser {
       : this._smoothed.mid * 0.75 + nMid * 0.25;
 
     this._smoothed.high = this._smoothed.high * 0.65 + nHigh * 0.35;
+
+    // ── Timbre sharpness: spectral centroid of the tonal range ──────────
+    // A saw wave spreads energy up its 1/n harmonic series → high centroid;
+    // a sine keeps it at the fundamental → low. Robustness against the mix:
+    //  · amplitude-SQUARED weighting — synth harmonics are tall peaks, hat/
+    //    noise energy is spread thin per bin, so squaring buries the noise
+    //  · percussive gate — frames during kick/snare transients barely count
+    //  · slow symmetric smoothing — 30 ms hat frames can't yank the value
+    {
+      let num = 0, den = 0;
+      const lo = Math.max(2, Math.floor(150 / binHz));
+      const hi = Math.min(Math.ceil(5000 / binHz), this.dataArray.length - 1);
+      for (let i = lo; i <= hi; i++) {
+        const v = this.dataArray[i] / 255;
+        num += v * v * i * binHz;
+        den += v * v;
+      }
+      const gate = 1 - Math.min(1, (this._kick + this._snare) * 1.5);
+      if (den > 0.05 && gate > 0.2) {
+        const centroid = num / den;
+        const raw = Math.min(1, Math.max(0, Math.log2(centroid / 260) / 2.2));
+        this.sharpness += (raw - this.sharpness) * 0.06 * gate;
+      }
+    }
 
     if (this.chromaAnalyser) {
       this.chromaAnalyser.getByteFrequencyData(this.chromaData);

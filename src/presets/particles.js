@@ -118,7 +118,7 @@ export class ParticlesPreset {
     const { fade } = PostFX.trailFactors(this._params, this._dtMs);
 
     const enc = device.createCommandEncoder();
-    this.post.fadePass(enc, fade);
+    this.post.fadePass(enc, fade, this._params);
 
     // Particles rendered additively on top of the faded history
     const pass = enc.beginRenderPass({

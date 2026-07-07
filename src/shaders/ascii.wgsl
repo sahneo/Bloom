@@ -544,5 +544,6 @@ fn fs_main(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let cov = textureSampleLevel(glyph_tex, samp, guv, 0.0).r;
 
   let c = clamp(cov * bright, 0.0, 1.0);
-  return vec4f(vec3f(c), 1.0);
+  // Glyph colour from the user picker (anim2.yzw), white by default
+  return vec4f(u.anim2.yzw * c, 1.0);
 }

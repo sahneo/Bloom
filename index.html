@@ -550,6 +550,27 @@
     }
     #btn-ripple-color:hover { opacity: 0.85; }
 
+    /* ── ASCII glyph colour swatch ─────────────────────────────── */
+    #btn-ascii-color {
+      position: fixed;
+      bottom: 20px;
+      left: 62px;
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      border-radius: 6px;
+      opacity: 0.4;
+      pointer-events: all;
+      background: rgba(255, 255, 255, 0.2);
+      border-color: rgba(255, 255, 255, 0.45);
+      transition: opacity 0.2s;
+      font-size: 0.5rem;
+      letter-spacing: 0;
+      color: rgba(0,0,0,0.55);
+      font-weight: 700;
+    }
+    #btn-ascii-color:hover { opacity: 0.85; }
+
     /* ── Reset / Random buttons ─────────────────────────────────── */
     .tune-actions {
       display: flex;
@@ -808,6 +829,8 @@
   <button id="btn-ascii">ASCII</button>
   <button id="btn-silk">SILK</button>
   <button id="btn-flora">FLORA</button>
+  <button id="btn-fluid">INK</button>
+  <button id="btn-ferro">FERRO</button>
   <button id="btn-bpm">BPM</button>
   <select id="genre-select" title="Genre preset — tunes detection and visuals">
     <option value="auto" selected>AUTO</option>
@@ -930,6 +953,11 @@
     <input type="range" id="sl-glow" min="0" max="2.5" step="0.05" value="1">
     <span class="tune-val" id="v-glow">1.00</span>
   </div>
+  <div class="tune-row">
+    <span class="tune-label">Timbre</span>
+    <input type="range" id="sl-timbre" min="0" max="1" step="0.05" value="1">
+    <span class="tune-val" id="v-timbre">1.00</span>
+  </div>
   <div class="tune-divider"></div>
   <div class="tune-actions">
     <button id="btn-reset-tune">RESET</button>
@@ -961,6 +989,8 @@
 
 <button id="btn-ripple-color" title="Ripple color"></button>
 <input type="color" id="ripple-color-input" value="#00D9FF" style="display:none">
+<button id="btn-ascii-color" title="ASCII glyph color">A</button>
+<input type="color" id="ascii-color-input" value="#FFFFFF" style="display:none">
 
 <div id="transport" class="hidden">
   <span id="transport-name"></span>

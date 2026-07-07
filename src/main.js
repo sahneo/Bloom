@@ -13,6 +13,7 @@ import { OscilloscopePreset } from './presets/oscilloscope.js';
 import { AsciiPreset }        from './presets/ascii.js';
 import { SilkPreset }         from './presets/silk.js';
 import { FloraPreset }        from './presets/flora.js';
+import { FluidPreset, FerroPreset } from './presets/fluid.js';
 import posthogLib from 'posthog-js';
 
 // Analytics key comes from the environment (.env.local / Vercel env) — never
@@ -225,6 +226,7 @@ bindSlider('sl-spring',      'v-spring',      'spring');
 bindSlider('sl-dissonance',  'v-dissonance',  'dissonanceStrength');
 bindSlider('sl-trail',       'v-trail',       'trail');
 bindSlider('sl-glow',        'v-glow',        'glow');
+bindSlider('sl-timbre',      'v-timbre',      'timbreStrength');
 
 btnTune.addEventListener('click', () => {
   const hidden = tunePanel.classList.toggle('hidden');
@@ -236,7 +238,7 @@ btnTune.addEventListener('click', () => {
 // ── Reset to defaults ────────────────────────────────────────────────
 const DEFAULTS = {
   mulSb: 1, mulBass: 3, mulMid: 1, mulHigh: 1, spring: 0.3,
-  dissonanceStrength: 1, trail: 0.5, glow: 1,
+  dissonanceStrength: 1, trail: 0.5, glow: 1, timbreStrength: 1,
   modeDrums: 1, modeBass: 0, modeLead: 0, modeAtmos: 0, modePads: 0,
 };
 
@@ -251,6 +253,7 @@ function resetToDefaults() {
     ['sl-dissonance', 'v-dissonance', 'dissonanceStrength'],
     ['sl-trail',      'v-trail',      'trail'],
     ['sl-glow',       'v-glow',       'glow'],
+    ['sl-timbre',     'v-timbre',     'timbreStrength'],
   ].forEach(([slId, vlId, key]) => {
     const sl = document.getElementById(slId);
     const vl = document.getElementById(vlId);
@@ -603,9 +606,13 @@ async function init() {
     ascii:        AsciiPreset,
     silk:         SilkPreset,
     flora:        FloraPreset,
+    fluid:        FluidPreset,
+    ferro:        FerroPreset,
   };
   const btnSilk  = document.getElementById('btn-silk');
   const btnFlora = document.getElementById('btn-flora');
+  const btnFluid = document.getElementById('btn-fluid');
+  const btnFerro = document.getElementById('btn-ferro');
 
   async function setMode(mode) {
     currentMode = mode;
@@ -614,6 +621,8 @@ async function init() {
     btnAscii.classList.toggle('active',   mode === 'ascii');
     btnSilk.classList.toggle('active',    mode === 'silk');
     btnFlora.classList.toggle('active',   mode === 'flora');
+    btnFluid.classList.toggle('active',   mode === 'fluid');
+    btnFerro.classList.toggle('active',   mode === 'ferro');
     posthog.capture('mode_changed', { mode });
   }
 
@@ -621,6 +630,8 @@ async function init() {
   btnAscii.addEventListener('click',   () => setMode(currentMode === 'ascii'        ? 'particles' : 'ascii'));
   btnSilk.addEventListener('click',    () => setMode(currentMode === 'silk'         ? 'particles' : 'silk'));
   btnFlora.addEventListener('click',   () => setMode(currentMode === 'flora'        ? 'particles' : 'flora'));
+  btnFluid.addEventListener('click',   () => setMode(currentMode === 'fluid'        ? 'particles' : 'fluid'));
+  btnFerro.addEventListener('click',   () => setMode(currentMode === 'ferro'        ? 'particles' : 'ferro'));
 
   btnMidi.addEventListener('click', async () => {
     try {
@@ -634,6 +645,20 @@ async function init() {
       statusMidi.classList.add('error');
       console.error('MIDI:', e);
     }
+  });
+
+  const btnAsciiColor   = document.getElementById('btn-ascii-color');
+  const asciiColorInput = document.getElementById('ascii-color-input');
+  btnAsciiColor.addEventListener('click', () => asciiColorInput.click());
+  asciiColorInput.addEventListener('input', e => {
+    const hex = e.target.value;
+    const r = parseInt(hex.slice(1, 3), 16) / 255;
+    const g = parseInt(hex.slice(3, 5), 16) / 255;
+    const b = parseInt(hex.slice(5, 7), 16) / 255;
+    params.asciiColor = [r, g, b];
+    btnAsciiColor.style.background  = `rgba(-e,-e,-e,0.35)`;
+    btnAsciiColor.style.borderColor = `rgba(-e,-e,-e,0.65)`;
+    posthog.capture('ascii_color_changed', { color: hex });
   });
 
   btnRippleColor.addEventListener('click', () => rippleColorInput.click());
@@ -865,7 +890,7 @@ async function init() {
 
     // Structure → AutoVJ → generative drift
     const st = structure.update(rawBands, beat, dtS);
-    autovj.update(st);
+    autovj.update(st, dtS);
     drift.update(dtS, fftEnergy);
     params.tension    = st.tension;
     params.dropPulse  = st.dropPulse;
@@ -879,8 +904,20 @@ async function init() {
     // An active kaleidoscope gets a constant slow spin — static mandalas bore.
     if (params.kaleidoK >= 2) _kaleidoSpin += dtS * 0.06;
     params.camZoom = 1 + st.tension * 0.15 + st.dropPulse * 0.25
+                   + (params.zoomPunch ?? 0) * 0.35
                    + Math.max(0, (drift.scale - 1.05)) * 0.30;
     params.camRot  = drift.rot * 0.35 + _kaleidoSpin;
+
+    // Post-chain inputs: nebula/grain clock, sub-bass breathing, echo steps
+    // (scene picks a per-frame step at 60 fps; correct it for real frame time)
+    const dt60 = dtS * 1000 / 16.67;
+    params.anamorphic   = currentMode === 'fluid' ? 1.3 : (params.anamorphicScene ?? 0);
+    params.timeS        = ts / 1000;
+    params.subBassLevel = bands.subBass;
+    // Timbre reaction, scaled by the user's Timbre slider (0 = off)
+    params.sharpness    = audio.sharpness * (params.timbreStrength ?? 1);
+    params.echoZoom     = Math.pow(params.echoZoomBase ?? 1, dt60);
+    params.echoRot      = (params.echoRotBase ?? 0) * dt60;
 
     params.rippleData = ripples.getUniforms();
     ripples.update();

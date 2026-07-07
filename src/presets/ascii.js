@@ -329,7 +329,9 @@ export class AsciiPreset {
     u[30] = this.seedB;  u[31] = this._beatConf;
     u[32] = this.walkX;
     u[33] = this.birdX;  u[34] = this.birdY;   u[35] = birdFrame;
-    u[36] = walkFrame;   u[37] = 0;            u[38] = 0;               u[39] = 0;
+    // anim2.yzw carries the user-picked glyph colour (default white)
+    const col = params.asciiColor ?? [1, 1, 1];
+    u[36] = walkFrame;   u[37] = col[0];       u[38] = col[1];          u[39] = col[2];
     device.queue.writeBuffer(this.uniformBuffer, 0, u);
   }
 

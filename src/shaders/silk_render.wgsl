@@ -12,6 +12,7 @@ struct Uniforms {
   bar_pos:    f32, key_hue:     f32, key_conf:  f32, trail_gain: f32,
   tension:    f32, drop_pulse:  f32, drift_scale: f32, drift_rot: f32,
   drift_x:    f32, drift_y:     f32, scene_seed: f32, palette_mode: f32,
+  sharpness:  f32, _r1:         f32, _r2:       f32, _r3:        f32,
   ripple_pos_age: array<vec4f, 8>,
   ripple_color:   array<vec4f, 8>,
 }
@@ -108,9 +109,11 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   else                  { tone_rgb = mix(neutral_hue, cool_hue, -u.tonality); }
   let rgb = mix(tone_rgb, key_rgb, u.key_conf * 0.80);
 
-  // Soft edge across width, fade toward tail, life fade near respawn
+  // Soft edge across width, fade toward tail, life fade near respawn.
+  // Timbre controls the edge: saw = crisp ribbon, sine = airy gauze
   let edge = 1.0 - abs(in.edge);
-  let soft = edge * edge * (1.0 - in.along);
+  // max() guards pow(0, y) — NaN on Metal, rendered as black quads
+  let soft = pow(max(edge, 0.001), mix(2.4, 0.9, u.sharpness)) * (1.0 - in.along);
   let lifef = smoothstep(0.0, 0.08, in.life) * smoothstep(1.0, 0.92, in.life);
 
   var amp = u.bass;

@@ -19,9 +19,11 @@ struct Uniforms {
   tension:    f32, drop_pulse:  f32, drift_scale: f32, drift_rot: f32,
   // row 9 — drift offset (wandering composition centre), scene seed, palette scheme
   drift_x:    f32, drift_y:     f32, scene_seed: f32, palette_mode: f32,
-  // rows 10-17: ripple data — (x, y, age_sec, _) per slot; age<0 = inactive
+  // row 10 — timbre sharpness (0 sine-soft → 1 saw-bright) from spectral centroid
+  sharpness:  f32, _r1:         f32, _r2:       f32, _r3:        f32,
+  // rows 11-18: ripple data — (x, y, age_sec, _) per slot; age<0 = inactive
   ripple_pos_age: array<vec4f, 8>,
-  // rows 18-25: ripple colors — (r, g, b, _)
+  // rows 19-26: ripple colors — (r, g, b, _)
   ripple_color:   array<vec4f, 8>,
 }
 
@@ -354,6 +356,16 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
 
   // Drop blast: single hard radial shockwave when StructureAnalyzer fires
   f += normalize(rp + vec2f(0.0001)) * u.drop_pulse * 30.0 * exp(-length(rp) * 1.1);
+
+  // Timbre → trajectory character: saw-bright synths kick particles with
+  // abrupt angular impulses (jagged paths); sine-soft leaves motion fluid.
+  // Seed rotates ~6×/s so direction breaks are visible, not noise.
+  if (u.sharpness > 0.05) {
+    let jseed = pcg((idx ^ u32(t * 6.0)) * 2654435761u);
+    let jdir  = normalize(vec2f(f32(jseed & 0xffffu) / 32767.5 - 1.0,
+                                f32(jseed >> 16u)    / 32767.5 - 1.0) + vec2f(0.0001));
+    f += jdir * u.sharpness * u.sharpness * (u.mid * u.mul_mid + u.high * u.mul_high) * 6.0;
+  }
 
   // Ambient drift when fully silent — all bands stay alive
   let energy  = clamp(u.sub_bass + u.bass + u.mid + u.high + u.kick + u.snare, 0.0, 1.0);

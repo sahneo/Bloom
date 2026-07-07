@@ -9,6 +9,7 @@ struct Uniforms {
   bar_pos:    f32, key_hue:     f32, key_conf:   f32, trail_gain: f32,
   tension:    f32, drop_pulse:  f32, drift_scale: f32, drift_rot: f32,
   drift_x:    f32, drift_y:     f32, scene_seed: f32, palette_mode: f32,
+  sharpness:  f32, _r1:         f32, _r2:       f32, _r3:        f32,
   ripple_pos_age: array<vec4f, 8>,
   ripple_color:   array<vec4f, 8>,
 }
@@ -105,7 +106,8 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   else if (bi == 3u) { base = 0.10 + u.high * 0.70 + u.snare * 0.25; }  // atmos: dim sparkles, snare cross
   else               { base = 0.15 + u.sub_bass * 0.30; }                // pads: very dim, sub-bass glow
 
-  // Shape: pads are soft blobs, drums are crisp, rest are normal dots
+  // Shape: pads are soft blobs, drums are crisp, the rest follow TIMBRE —
+  // saw-bright synths render razor edges, sine-soft pads render haze
   var edge: f32;
   if (bi == 4u) {
     // Pads: very soft falloff — large diffuse blob
@@ -114,8 +116,8 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
     // Drums: hard edge — sharp dot
     edge = smoothstep(1.0, 0.6, d);
   } else {
-    // Default: medium crisp
-    edge = smoothstep(1.0, 0.72, d);
+    let hard = mix(0.25, 0.88, u.sharpness);
+    edge = smoothstep(1.0, hard, d);
   }
 
   // Speed-driven bright core — visible on fast-moving particles

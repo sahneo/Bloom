@@ -108,7 +108,7 @@ export class SilkPreset {
     const { fade } = PostFX.trailFactors(this._params, this._dtMs);
 
     const enc = device.createCommandEncoder();
-    this.post.fadePass(enc, fade);
+    this.post.fadePass(enc, fade, this._params);
 
     const pass = enc.beginRenderPass({
       colorAttachments: [{ view: this.post.accumView, loadOp: 'load', storeOp: 'store' }],

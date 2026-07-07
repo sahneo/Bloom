@@ -15,6 +15,11 @@ export class Renderer {
     if (!adapter) throw new Error('No WebGPU adapter found.');
 
     this.device  = await adapter.requestDevice();
+    // Surface silent validation failures — headless Chrome doesn't always
+    // print these to the console on its own
+    this.device.addEventListener('uncapturederror', (e) => {
+      console.error('[WebGPU]', e.error?.message ?? e.error);
+    });
     this.context = this.canvas.getContext('webgpu');
     this.format  = navigator.gpu.getPreferredCanvasFormat();
 
