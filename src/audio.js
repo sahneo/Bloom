@@ -1,8 +1,15 @@
+// Universal band ranges (Hz) — genre presets narrow these for better separation
+const DEFAULT_RANGES = {
+  subBass: [20, 80],   bass: [80, 250],      mid: [250, 2000], high: [2000, 16000],
+  kick:    [35, 70],   kickHarm: [150, 450], snare: [2500, 7000],
+};
+
 export class AudioAnalyser {
   constructor() {
     this.context = null;
     this.analyser = null;
     this.dataArray = null;
+    this.ranges = { ...DEFAULT_RANGES };
     this.bands = { subBass: 0, bass: 0, mid: 0, high: 0, kick: 0, snare: 0 };
     this._smoothed = { subBass: 0, bass: 0, mid: 0, high: 0 };
     this._maxEnergy = 0.001;
@@ -44,6 +51,11 @@ export class AudioAnalyser {
   async connectSystemAudio() {
     const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
     stream.getVideoTracks().forEach(t => t.stop());
+    // Picking a window (not the entire screen), or leaving "share audio"
+    // unchecked, yields a video-only stream — fail loudly instead of silently
+    if (stream.getAudioTracks().length === 0) {
+      throw new Error('no audio — share the ENTIRE screen with "Also share system audio" on');
+    }
     this._connectStream(stream);
   }
 
@@ -250,14 +262,15 @@ export class AudioAnalyser {
 
     const binHz = this.context.sampleRate / this.analyser.fftSize;
 
+    const R = this.ranges;
     const raw = {
-      subBass:     this._avg(20,   80,    binHz),
-      bass:        this._avg(80,   250,   binHz),
-      mid:         this._avg(250,  2000,  binHz),
-      high:        this._avg(2000, 16000, binHz),
-      kickRaw:     this._avg(35,   70,    binHz),
-      kickHarmRaw: this._avg(150,  450,   binHz),
-      snareRaw:    this._avg(2500, 7000,  binHz),
+      subBass:     this._avg(R.subBass[0],  R.subBass[1],  binHz),
+      bass:        this._avg(R.bass[0],     R.bass[1],     binHz),
+      mid:         this._avg(R.mid[0],      R.mid[1],      binHz),
+      high:        this._avg(R.high[0],     R.high[1],     binHz),
+      kickRaw:     this._avg(R.kick[0],     R.kick[1],     binHz),
+      kickHarmRaw: this._avg(R.kickHarm[0], R.kickHarm[1], binHz),
+      snareRaw:    this._avg(R.snare[0],    R.snare[1],    binHz),
     };
 
     const energy = (raw.subBass + raw.bass + raw.mid + raw.high) / 4;
@@ -353,6 +366,14 @@ export class AudioAnalyser {
       snare:   this._snare,
     };
     return this.bands;
+  }
+
+  // Genre presets override band frequency ranges; null restores defaults.
+  // Normalization state resets so old maxima from other ranges don't linger.
+  setBandRanges(ranges) {
+    this.ranges = { ...DEFAULT_RANGES, ...(ranges ?? {}) };
+    this._kickBandMax = this._kickHarmMax = this._snareBandMax = 0.001;
+    this._maxEnergy = 0.001;
   }
 
   // ── Template training API ──────────────────────────────────────────

@@ -35,6 +35,13 @@ function rotateTo(profile, root) {
   return Array.from({ length: 12 }, (_, i) => profile[(i - root + 12) % 12]);
 }
 
+// Key root → hue via the circle of fifths: harmonically adjacent keys
+// (C→G→D…) land on adjacent hues, so a modulation to the dominant is a
+// subtle colour shift while a tritone jump is a dramatic one.
+function rootToHue(root) {
+  return ((root * 7) % 12) / 12;
+}
+
 function dot(a, b) {
   return a.reduce((s, v, i) => s + v * b[i], 0);
 }
@@ -52,6 +59,21 @@ export class HarmonyAnalyzer {
     this.pulse       = 0;   // current display value, decays to 0
     this._silenceMs  = 0;   // ms since last note-on
     this._lastUpdateMs = performance.now();
+
+    // Key (tonic) tracking — hue on the circle of fifths, 0..1
+    this.keyHue        = 0;
+    this.keyConf       = 0;   // 0 = unknown key, 1 = confident
+    this._targetHue    = 0;
+    this._targetKeyConf = 0;
+  }
+
+  // Circular hue lerp (shortest path around the colour wheel) + confidence lerp
+  _smoothKey(deltaMs) {
+    const rate = Math.min(0.0008 * deltaMs, 1);  // ~2s transition — palette glides
+    let d = this._targetHue - this.keyHue;
+    d -= Math.round(d);                          // wrap to [-0.5, 0.5]
+    this.keyHue = (this.keyHue + d * rate + 1) % 1;
+    this.keyConf += (this._targetKeyConf - this.keyConf) * rate;
   }
 
   // Dissonance score for the currently active notes (0 = pure consonance, 1 = maximum).
@@ -122,10 +144,12 @@ export class HarmonyAnalyzer {
     for (let i = 0; i < 12; i++) histogram[i] /= histMax;
 
     // --- Compute tonality: compare best major vs best minor key match ---
-    let bestMajor = 0, bestMinor = 0;
+    let bestMajor = 0, bestMinor = 0, rootMajor = 0, rootMinor = 0;
     for (let root = 0; root < 12; root++) {
-      bestMajor = Math.max(bestMajor, dot(histogram, rotateTo(MAJOR_PROFILE, root)));
-      bestMinor = Math.max(bestMinor, dot(histogram, rotateTo(MINOR_PROFILE, root)));
+      const mj = dot(histogram, rotateTo(MAJOR_PROFILE, root));
+      const mn = dot(histogram, rotateTo(MINOR_PROFILE, root));
+      if (mj > bestMajor) { bestMajor = mj; rootMajor = root; }
+      if (mn > bestMinor) { bestMinor = mn; rootMinor = root; }
     }
 
     const total = bestMajor + bestMinor;
@@ -148,8 +172,11 @@ export class HarmonyAnalyzer {
       const raw = (bestMajor - bestMinor) / total; // typically ±0.2–0.6
       // Amplify with a power curve so small differences produce clear colour shifts
       this._targetTonality = Math.tanh(raw * 25);
+      this._targetHue     = rootToHue(bestMajor >= bestMinor ? rootMajor : rootMinor);
+      this._targetKeyConf = 1;
     } else if (this._silenceMs > 5000) {
       this._targetTonality = 0;
+      this._targetKeyConf  = 0;
     }
 
     // --- Lerp smoothed values ---
@@ -167,11 +194,15 @@ export class HarmonyAnalyzer {
     // FFT energy contributes a floor to pulse (keeps shader alive on audio-only tracks)
     const displayPulse = Math.max(this.pulse, fftEnergy * 0.35);
 
+    this._smoothKey(deltaMs);
+
     return {
       tonality:   this.tonality,
       pulse:      displayPulse,
       energy:     fftEnergy,
       dissonance: this.dissonance,
+      keyHue:     this.keyHue,
+      keyConf:    this.keyConf,
     };
   }
 
@@ -179,18 +210,19 @@ export class HarmonyAnalyzer {
   // Runs the same K-S correlation; used when MIDI is silent.
   //
   // Key insight: a single FFT frame (46ms) is too noisy for reliable key detection.
-  // We maintain a 2-second exponential moving average of the chromagram before
-  // running K-S — this averages out percussion, transients, and harmonic noise,
-  // leaving only the persistent pitch classes that define the key.
+  // We maintain a ~7-second exponential moving average of the chromagram before
+  // running K-S. A 2s window followed whatever CHORD was sounding (an Am→C→G
+  // progression flipped tonality every bar); 7s spans several bars, so the
+  // histogram reflects the KEY while individual chords average out.
   updateFromChroma(chroma, fftEnergy = 0) {
     const now     = performance.now();
     const deltaMs = now - this._lastUpdateMs;
     this._lastUpdateMs = now;
 
-    // ── Step 1: accumulate chromagram over ~2 seconds (τ ≈ 2s at 60fps) ──
+    // ── Step 1: accumulate chromagram over ~7 seconds ───────────────────
     if (!this._chromaAccum) this._chromaAccum = new Float32Array(12);
-    // alpha = 1 - e^(-dt/τ) ≈ dt/τ for small dt; τ = 2000ms
-    const alpha = Math.min(deltaMs / 2000, 0.15);
+    // alpha = 1 - e^(-dt/τ) ≈ dt/τ for small dt; τ = 7000ms
+    const alpha = Math.min(deltaMs / 7000, 0.05);
     if (fftEnergy > 0.02) {
       // Signal present: integrate new chromagram into accumulator
       for (let i = 0; i < 12; i++) {
@@ -211,10 +243,12 @@ export class HarmonyAnalyzer {
     }
 
     // ── Step 3: K-S correlation ─────────────────────────────────────────
-    let bestMajor = 0, bestMinor = 0;
+    let bestMajor = 0, bestMinor = 0, rootMajor = 0, rootMinor = 0;
     for (let root = 0; root < 12; root++) {
-      bestMajor = Math.max(bestMajor, dot(histogram, rotateTo(MAJOR_PROFILE, root)));
-      bestMinor = Math.max(bestMinor, dot(histogram, rotateTo(MINOR_PROFILE, root)));
+      const mj = dot(histogram, rotateTo(MAJOR_PROFILE, root));
+      const mn = dot(histogram, rotateTo(MINOR_PROFILE, root));
+      if (mj > bestMajor) { bestMajor = mj; rootMajor = root; }
+      if (mn > bestMinor) { bestMinor = mn; rootMinor = root; }
     }
 
     const total      = bestMajor + bestMinor;
@@ -222,9 +256,14 @@ export class HarmonyAnalyzer {
 
     if (hasContent) {
       const raw = (bestMajor - bestMinor) / total;
-      this._targetTonality = Math.tanh(raw * 40);
+      // Gain 15 (was 40): ±0.03 margins are common chord-level noise; 40 slammed
+      // them to ±1 and the colours pumped warm↔cool on every chord change
+      this._targetTonality = Math.tanh(raw * 15);
+      this._targetHue     = rootToHue(bestMajor >= bestMinor ? rootMajor : rootMinor);
+      this._targetKeyConf = 1;
     } else if (fftEnergy < 0.02) {
       this._targetTonality *= 0.997;
+      this._targetKeyConf  *= 0.997;
     }
 
     // Debug: log every 2 seconds
@@ -238,15 +277,25 @@ export class HarmonyAnalyzer {
       console.log(`  chroma(acc): ${accumStr || '(empty)'}`);
     }
 
-    // ── Step 4: smooth output ───────────────────────────────────────────
-    const tonalitySpeed = 0.004 * deltaMs;
+    // ── Step 4: smooth output (slower than the MIDI path — audio targets
+    //    are noisier, and colour should glide, not twitch) ────────────────
+    const tonalitySpeed = 0.001 * deltaMs;
     this.tonality += (this._targetTonality - this.tonality) * Math.min(tonalitySpeed, 1);
 
     const pulseDecay   = Math.pow(0.92, deltaMs / 16.67);
     this.pulse        *= pulseDecay;
     const displayPulse = Math.max(this.pulse, fftEnergy * 0.35);
 
-    return { tonality: this.tonality, pulse: displayPulse, energy: fftEnergy, dissonance: this.dissonance };
+    this._smoothKey(deltaMs);
+
+    return {
+      tonality:   this.tonality,
+      pulse:      displayPulse,
+      energy:     fftEnergy,
+      dissonance: this.dissonance,
+      keyHue:     this.keyHue,
+      keyConf:    this.keyConf,
+    };
   }
 
   // Manually override tonality (manual key selector)

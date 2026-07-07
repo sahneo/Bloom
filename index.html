@@ -285,6 +285,22 @@
     }
     #top-left button:hover  { opacity: 0.65; }
     #top-left button.active { opacity: 0.85; border-color: rgba(255,255,255,0.35); }
+    #genre-select {
+      padding: 5px 8px;
+      font-size: 0.62rem;
+      letter-spacing: 0.10em;
+      opacity: 0.22;
+      transition: opacity 0.2s;
+      background: rgba(0,0,0,0.4);
+      color: #ccc;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 4px;
+      font-family: inherit;
+      cursor: pointer;
+      -webkit-appearance: none;
+    }
+    #genre-select:hover { opacity: 0.65; }
+    #genre-select.set   { opacity: 0.85; border-color: rgba(255,255,255,0.35); }
 
     /* ── Debug overlay ───────────────────────────────────────────── */
     #debug {
@@ -790,7 +806,18 @@
   <button id="btn-train">TRAIN</button>
   <button id="btn-oscillo">SCOPE</button>
   <button id="btn-ascii">ASCII</button>
+  <button id="btn-silk">SILK</button>
+  <button id="btn-flora">FLORA</button>
   <button id="btn-bpm">BPM</button>
+  <select id="genre-select" title="Genre preset — tunes detection and visuals">
+    <option value="auto" selected>AUTO</option>
+    <option value="techno">TECHNO</option>
+    <option value="house">HOUSE</option>
+    <option value="dnb">DNB</option>
+    <option value="hiphop">HIP-HOP</option>
+    <option value="ambient">AMBIENT</option>
+  </select>
+  <button id="btn-vj" class="active" title="Auto-VJ: rotates visual modes on musical events">VJ</button>
   <button id="btn-help" title="Tutorial">?</button>
 </div>
 
@@ -802,6 +829,7 @@
   <div class="db-row"><span class="db-label">HIGH</span> <div class="db-track"><div class="db-bar" id="db-bar-high"></div></div> <span class="db-val" id="db-val-high">0.00</span></div>
   <div class="db-row"><span class="db-label">SUB</span>  <div class="db-track"><div class="db-bar" id="db-bar-subBass"></div></div><span class="db-val" id="db-val-subBass">0.00</span></div>
   <div class="db-row"><span class="db-label">TONAL</span><div class="db-track" style="position:relative"><div id="db-bar-tonal" style="position:absolute;top:0;height:100%;width:2px;background:#fff;left:50%"></div></div><span class="db-val" id="db-val-tonal">0.00</span></div>
+  <div class="db-row"><span class="db-label">TENS</span> <div class="db-track"><div class="db-bar" id="db-bar-tension" style="background:#ff6688"></div></div><span class="db-val" id="db-val-struct">quiet</span></div>
 </div>
 
 <button id="btn-tune">TUNE</button>
@@ -891,6 +919,16 @@
     <span class="tune-label">Dissonance</span>
     <input type="range" id="sl-dissonance" min="0" max="3" step="0.05" value="1">
     <span class="tune-val" id="v-dissonance">1.00</span>
+  </div>
+  <div class="tune-row">
+    <span class="tune-label">Trail</span>
+    <input type="range" id="sl-trail" min="0" max="1" step="0.01" value="0.5">
+    <span class="tune-val" id="v-trail">0.50</span>
+  </div>
+  <div class="tune-row">
+    <span class="tune-label">Glow</span>
+    <input type="range" id="sl-glow" min="0" max="2.5" step="0.05" value="1">
+    <span class="tune-val" id="v-glow">1.00</span>
   </div>
   <div class="tune-divider"></div>
   <div class="tune-actions">

@@ -5,9 +5,18 @@ struct Uniforms {
   mul_high:   f32, spring:      f32, kick:       f32, snare:      f32,
   mode_drums: f32, mode_bass:   f32, mode_lead:  f32, mode_atmos: f32,
   mode_pads:  f32, color_mode:  f32, tonality:   f32, pulse:       f32,
-  dissonance: f32, dis_strength: f32, _p2:         f32, _p3:        f32,
+  dissonance: f32, dis_strength: f32, beat_t:     f32, beat_conf:  f32,
+  bar_pos:    f32, key_hue:     f32, key_conf:   f32, trail_gain: f32,
+  tension:    f32, drop_pulse:  f32, drift_scale: f32, drift_rot: f32,
+  drift_x:    f32, drift_y:     f32, scene_seed: f32, palette_mode: f32,
   ripple_pos_age: array<vec4f, 8>,
   ripple_color:   array<vec4f, 8>,
+}
+
+fn hsv2rgb(c: vec3f) -> vec3f {
+  let k = fract(vec3f(c.x, c.x + 2.0 / 3.0, c.x + 1.0 / 3.0)) * 6.0;
+  let rgb = clamp(abs(k - 3.0) - 1.0, vec3f(0.0), vec3f(1.0));
+  return c.z * mix(vec3f(1.0), rgb, c.y);
 }
 
 struct Particle {
@@ -45,14 +54,18 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VSOut {
   let aspect = u.res_x / u.res_y;
   let spd    = length(p.vel);
 
+  // Beat-synced size pulse — particles swell on the predicted beat
+  let beat_env  = exp(-fract(u.beat_t) * 8.0) * u.beat_conf;
+  let beat_size = 1.0 + beat_env * 0.22;
+
   var offset: vec2f;
   if (spd > 0.008) {
     let vd      = p.vel / spd;
     let vp      = vec2f(-vd.y, vd.x);
     let stretch = 1.0 + spd * 4.5;
-    offset = vd * c.y * p.size * stretch + vp * c.x * p.size;
+    offset = (vd * c.y * p.size * stretch + vp * c.x * p.size) * beat_size;
   } else {
-    offset = c * p.size;
+    offset = c * p.size * beat_size;
   }
 
   // Dissonance: each particle shakes at a unique phase — strong enough to see at field level
@@ -125,7 +138,18 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   let alpha = in.life * edge;
   // Dissonance flicker: rapid per-particle brightness instability
   let flicker = 1.0 + dis * 0.7 * sin(u.time * 31.0 + in.band * 4.3 + in.speed * 17.0);
-  let bright = (base + core) * alpha * opacity * max(flicker, 0.0);
+
+  // Beat-synced brightness pulse: flash on the predicted beat, stronger on
+  // the downbeat. Gated on tracker confidence so it vanishes without a groove.
+  let beat_phase = fract(u.beat_t);
+  let is_down    = 1.0 - step(1.0, u.bar_pos);
+  let beat_flash = exp(-beat_phase * 6.0) * u.beat_conf * (0.20 + is_down * 0.18);
+
+  // Structure dynamics: builds glow hotter as tension rises; a drop fires a
+  // full-field flash that decays with drop_pulse
+  let struct_boost = 1.0 + u.tension * 0.22 + u.drop_pulse * 0.9;
+
+  let bright = (base + core) * alpha * opacity * max(flicker, 0.0) * (1.0 + beat_flash) * struct_boost;
 
   // Tonality color: -1=minor(cool blues/purples), 0=neutral, +1=major(warm ambers)
   let cool_hue    = vec3f(0.28, 0.42, 1.00);   // blue-violet for minor
@@ -137,6 +161,36 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   } else {
     tone_rgb = mix(neutral_hue, cool_hue, -u.tonality);
   }
+
+  // Key palette: the detected tonic picks a hue on the circle of fifths, so
+  // each song owns a colour and a modulation shifts the whole scene.
+  // Major keys render brighter/more saturated; minor keys deeper and cooler.
+  // Blend is gated on key confidence — falls back to plain warm/cool above.
+  var key_sat  = 0.72 + u.tonality * 0.10;
+  let key_val  = 0.92 + max(u.tonality, 0.0) * 0.08;
+
+  // Palette director: scenes assign colour ROLES per band instead of tinting
+  // everything one hue — contrast between layers, not a monochrome soup.
+  //   0 mono          — everything on the key hue (original behaviour)
+  //   1 duotone       — atmosphere/pads flip to the complement, desaturated
+  //   2 complementary — lead is the hot accent against the key base
+  //   3 analogous     — bands fan out ±0.06 around the key hue
+  var hue = u.key_hue;
+  let pm  = u32(u.palette_mode + 0.5);
+  if (pm == 1u) {
+    if (bi == 3u || bi == 4u) { hue = fract(hue + 0.5); key_sat *= 0.55; }
+  } else if (pm == 2u) {
+    if (bi == 2u)      { hue = fract(hue + 0.5); }
+    else if (bi == 3u) { hue = fract(hue + 0.07); }
+  } else if (pm == 3u) {
+    hue = fract(hue + (f32(bi) - 2.0) * 0.06);
+  }
+  let key_rgb  = hsv2rgb(vec3f(hue, key_sat, key_val));
+  let temp_tint = select(
+    mix(vec3f(1.0), vec3f(0.62, 0.72, 1.15), -u.tonality),  // minor → cool cast
+    mix(vec3f(1.0), vec3f(1.15, 0.95, 0.70),  u.tonality),  // major → warm cast
+    u.tonality > 0.0);
+  tone_rgb = mix(tone_rgb, key_rgb * temp_tint, u.key_conf * 0.80);
 
   // Pulse: brief brightness flash on MIDI note attacks
   let pulse_boost = u.pulse * 0.25;
@@ -176,5 +230,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
     let avg_col = rcol_sum / (rwave_sum + 0.001);
     c = mix(c, avg_col * (bright * 1.6 + 0.03 * alpha), tint * 0.70);
   }
-  return vec4f(c, bright + pulse_boost * alpha);
+  // trail_gain compensates for energy accumulating in the trail buffer —
+  // long trails would otherwise saturate the centre to a white disk
+  return vec4f(c * u.trail_gain, (bright + pulse_boost * alpha) * u.trail_gain);
 }

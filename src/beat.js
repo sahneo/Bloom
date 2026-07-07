@@ -26,6 +26,8 @@ export class BeatTracker {
     this.period = 0.5;        // s/beat (120 BPM default)
     this.conf   = 0;
     this.beatT  = 0;
+    this._priorCenter = 115;  // log-gaussian tempo prior (genre presets narrow it)
+    this._priorSigma  = 0.6;
 
     this._env     = new Float32Array(ENV_LEN);
     this._envPos  = 0;
@@ -39,11 +41,40 @@ export class BeatTracker {
     this._lastAnalysis = 0;
     this._candPeriod   = 0;   // tempo-change hypothesis
     this._candVotes    = 0;
+    this._phX = 0;            // circular mean of onset phases (phase-lock)
+    this._phY = 0;
     this._scoreEma     = new Float32Array(MAX_LAG + 1);  // evidence across analyses
     this._lastLoggedBpm = 0;
   }
 
   get bpm() { return 60 / this.period; }
+
+  // Genre presets center the tempo prior (e.g. DnB ~172, hip-hop ~90).
+  // Score memory resets so the old prior's ranking doesn't linger.
+  setTempoPrior(center, sigma) {
+    this._priorCenter = center;
+    this._priorSigma  = sigma;
+    this._scoreEma.fill(0);
+    this._candVotes = 0;
+  }
+
+  // Tap-tempo hint: the user tapped a steady rhythm — treat it as strong
+  // evidence. Adopts the tapped tempo directly (folding octaves into a sane
+  // 65–185 range), tightens the prior around it so analyses keep re-finding
+  // it, and aligns the beat phase to the last tap.
+  tapHint(bpm, lastTapTimeS) {
+    let b = bpm;
+    while (b < 65)  b *= 2;
+    while (b > 185) b /= 2;
+    this.period = 60 / b;
+    this.setTempoPrior(b, 0.18);
+    this.conf = Math.max(this.conf, 0.5);
+    // Phase: the tap instant is a beat — snap beatT to a whole beat there
+    if (lastTapTimeS !== undefined) {
+      this.beatT = Math.round(this.beatT);
+    }
+    console.log(`[beat] tap-tempo hint: ${b.toFixed(1)} BPM`);
+  }
 
   // Bar position 0..4 with the detected downbeat at 0
   barPos() {
@@ -79,15 +110,32 @@ export class BeatTracker {
       this._envAcc = 0;
     }
 
-    // PLL: strong KICK/SNARE onsets pull predicted phase toward themselves;
-    // hats are excluded — offbeat hats (house!) would drag phase half a beat.
-    // Hits far from the predicted beat (likely syncopation) pull weakly.
+    // Phase lock: strong KICK/SNARE onsets vote for the grid offset via a
+    // circular mean (vector average of onset phases). A proportional pull with
+    // a dead zone gets stuck when the grid settles ~half a beat off (measured:
+    // phase 0.44 at true kicks, correction weight 0 there) — the circular mean
+    // converges from ANY initial offset. Hats are excluded — offbeat hats
+    // (house!) would drag phase half a beat.
     const phasePull = dK + dS * 0.8;
     if (phasePull > 0.25 && this.conf > 0.15) {
-      const phase = this.beatT % 1;
-      const err = phase < 0.5 ? phase : phase - 1;
-      const w = Math.max(0, 1 - Math.abs(err) * 2.5);
-      this.beatT -= err * 0.35 * w;
+      const ang = (this.beatT % 1) * 2 * Math.PI;
+      const w   = Math.min(phasePull, 1);
+      this._phX = this._phX * 0.9 + Math.cos(ang) * w;
+      this._phY = this._phY * 0.9 + Math.sin(ang) * w;
+      const mag = Math.hypot(this._phX, this._phY);
+      if (mag > 0.8) {
+        // Mean onset phase relative to the predicted beat, in beats (-0.5..0.5]
+        const meanErr = Math.atan2(this._phY, this._phX) / (2 * Math.PI);
+        const shift   = meanErr * 0.25 * Math.min(mag / 3, 1);
+        this.beatT -= shift;
+        // Rotate accumulated votes along with the grid so they don't
+        // re-report the offset we just corrected
+        const rot = -shift * 2 * Math.PI;
+        const nx  = this._phX * Math.cos(rot) - this._phY * Math.sin(rot);
+        const ny  = this._phX * Math.sin(rot) + this._phY * Math.cos(rot);
+        this._phX = nx;
+        this._phY = ny;
+      }
     }
 
     if (timeS - this._lastAnalysis > ANALYZE_S) {
@@ -136,6 +184,7 @@ export class BeatTracker {
     // Log-gaussian tempo prior ~115 BPM resolves remaining octave ties.
     // Scores are EMA-smoothed across analyses so one noisy window can't
     // flip the winner (mid-track BPM wandering).
+    const curLag = this.period * ENV_HZ;
     let bestLag = 0, bestScore = -1;
     for (let lag = MIN_LAG; lag <= MAX_LAG; lag++) {
       let on = 0, off = 0, wOn = 0, wOff = 0;
@@ -148,19 +197,41 @@ export class BeatTracker {
       }
       let sc = on / wOn - OFF_COMB * (wOff ? off / wOff : 0);
       const bpm = 60 * ENV_HZ / lag;
-      const dev = Math.log2(bpm / 115) / 0.6;
+      const dev = Math.log2(bpm / this._priorCenter) / this._priorSigma;
       sc *= Math.exp(-0.5 * dev * dev);
-      this._scoreEma[lag] = this._scoreEma[lag] * 0.65 + sc * 0.35;
+      // Continuity bonus: once locked, competing metrical levels (3:2, 4:3,
+      // 2:1 impostors) often score within a few % of the winner and trade
+      // places between windows — real tracks measured 97↔140 BPM flapping.
+      // Reward staying near the current tempo, in proportion to confidence.
+      const relDev = Math.abs(lag - curLag) / curLag;
+      if (relDev < 0.06) sc *= 1 + 0.30 * this.conf;
+      this._scoreEma[lag] = this._scoreEma[lag] * 0.75 + sc * 0.25;
       if (this._scoreEma[lag] > bestScore) { bestScore = this._scoreEma[lag]; bestLag = lag; }
     }
     if (bestLag === 0) return;
 
-    // Downbeat: rotate bar so the strongest-kick slot becomes "1"
+    // Downbeat: rotate bar so the strongest-kick slot becomes "1".
+    // Hysteresis: re-electing the downbeat every analysis made the bar dots
+    // hop around — a challenger slot must now beat the rest by 30% three
+    // analyses in a row before the bar rotates.
     let maxSlot = 0;
     for (let i = 1; i < 4; i++) {
       if (this._slotEnergy[i] > this._slotEnergy[maxSlot]) maxSlot = i;
     }
-    this._barOffset = maxSlot;
+    let second = 0;
+    for (let i = 0; i < 4; i++) {
+      if (i !== maxSlot) second = Math.max(second, this._slotEnergy[i]);
+    }
+    if (maxSlot !== this._barOffset && this._slotEnergy[maxSlot] > second * 1.3) {
+      if (maxSlot === this._barCand) this._barVotes = (this._barVotes ?? 0) + 1;
+      else { this._barCand = maxSlot; this._barVotes = 1; }
+      if (this._barVotes >= 3) {
+        this._barOffset = maxSlot;
+        this._barVotes  = 0;
+      }
+    } else {
+      this._barVotes = 0;
+    }
     for (let i = 0; i < 4; i++) this._slotEnergy[i] *= 0.6;   // slow forget
 
     // Parabolic interpolation around the peak → sub-bin (~ms) precision
@@ -178,23 +249,66 @@ export class BeatTracker {
     const targetConf = Math.min(1, prominence * 5 + Math.max(0, ac[bestLag]) * 0.8);
 
     // Tempo hysteresis: small deviations track smoothly; a different tempo
-    // must win 3 analyses in a row before being adopted
+    // must keep winning analyses before being adopted. Metrically-related
+    // candidates (2:1, 3:2, 4:3 — the DnB/half-time impostors) need far more
+    // evidence than an unrelated tempo (a real change, e.g. a DJ transition):
+    // flipping metrical level mid-track looks broken, while locking onto a
+    // genuinely new tempo a few seconds late is invisible.
     const rel = Math.abs(newPeriod - this.period) / this.period;
     if (rel < 0.05) {
       this.period = this.period * 0.65 + newPeriod * 0.35;
       this._candVotes = 0;
       this.conf += (targetConf - this.conf) * 0.5;
-    } else {
+    } else if (this.conf < 0.3) {
+      // Not meaningfully locked yet (startup, or after long instability) —
+      // adopt the winning candidate fast; strictness here only delays first
+      // lock. EXCEPT metrical relatives of the current tempo: a breakdown
+      // saps confidence, and without this guard the 3:2 impostor walked in
+      // through the fast path during quiet sections (108 → 162 mid-track).
+      const ratio = Math.max(newPeriod, this.period) / Math.min(newPeriod, this.period);
+      const metrical = [2, 3, 4, 1.5, 4 / 3].some(r => Math.abs(ratio - r) / r < 0.06);
       const relCand = this._candPeriod > 0
         ? Math.abs(newPeriod - this._candPeriod) / this._candPeriod : 1;
       if (relCand < 0.05) this._candVotes++;
       else { this._candPeriod = newPeriod; this._candVotes = 1; }
-      if (this._candVotes >= 3) {
+      // conf ≈ 0 means nothing was ever locked (startup) — the "current"
+      // period is just the 120 BPM default, not evidence worth defending
+      if (this._candVotes >= (metrical && this.conf > 0.05 ? 5 : 2)) {
+        this.period = this._candPeriod;
+        this._candVotes = 0;
+      }
+    } else {
+      const ratio = Math.max(newPeriod, this.period) / Math.min(newPeriod, this.period);
+      let metrical = [2, 3, 4, 1.5, 4 / 3].some(r => Math.abs(ratio - r) / r < 0.06);
+
+      // Octave-escape exception: a half-tempo lock (the most common octave
+      // error) below 100 BPM being challenged by its double is very likely a
+      // correction, not a flip — let it through on the fast track. The full
+      // metrical guard would defend the wrong octave for 16 s or forever.
+      const doubling = Math.abs(ratio - 2) < 0.12 && newPeriod < this.period;
+      if (doubling && this.bpm < 100) metrical = false;
+
+      // A challenger only counts if it clearly out-scores the incumbent tempo —
+      // near-ties are exactly the flapping we're suppressing
+      const curLagInt = Math.round(this.period * ENV_HZ);
+      const curScore  = (curLagInt >= MIN_LAG && curLagInt <= MAX_LAG)
+        ? this._scoreEma[curLagInt] : 0;
+      const margin = curScore > 1e-6 ? bestScore / curScore : 2;
+      const clearWin = margin > (metrical ? 1.15 : 1.05);
+
+      const relCand = this._candPeriod > 0
+        ? Math.abs(newPeriod - this._candPeriod) / this._candPeriod : 1;
+      if (relCand < 0.05 && clearWin) this._candVotes++;
+      else if (relCand < 0.05)        this._candVotes = Math.max(0, this._candVotes - 1);
+      else { this._candPeriod = newPeriod; this._candVotes = clearWin ? 1 : 0; }
+
+      const votesNeeded = metrical ? 8 : 3;   // 16 s vs 6 s of consistent evidence
+      if (this._candVotes >= votesNeeded) {
         this.period = this._candPeriod;
         this._candVotes = 0;
         this.conf = Math.min(this.conf, 0.45);        // re-earn confidence
       } else {
-        this.conf = Math.max(0, this.conf - 0.1);     // unstable → drift down
+        this.conf = Math.max(0, this.conf - 0.05);    // unstable → drift down
       }
     }
 

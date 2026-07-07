@@ -4,9 +4,15 @@ import { MIDIHandler }        from './midi.js';
 import { HarmonyAnalyzer }    from './harmony.js';
 import { RippleManager }      from './ripples.js';
 import { BeatTracker }        from './beat.js';
+import { StructureAnalyzer }  from './structure.js';
+import { AutoVJ }             from './autovj.js';
+import { GenerativeDrift }    from './drift.js';
+import { GENRES }             from './genres.js';
 import { ParticlesPreset }    from './presets/particles.js';
 import { OscilloscopePreset } from './presets/oscilloscope.js';
 import { AsciiPreset }        from './presets/ascii.js';
+import { SilkPreset }         from './presets/silk.js';
+import { FloraPreset }        from './presets/flora.js';
 import posthog from 'posthog-js';
 
 posthog.init('VITE_POSTHOG_KEY_REDACTED', {
@@ -34,8 +40,9 @@ const btnAscii         = document.getElementById('btn-ascii');
 const btnRippleColor   = document.getElementById('btn-ripple-color');
 const rippleColorInput = document.getElementById('ripple-color-input');
 
+let dprCap = 1.5;   // adaptive: lowered when frame time sags, restored when idle
 function resize() {
-  const dpr = Math.min(devicePixelRatio, 1.5);
+  const dpr = Math.min(devicePixelRatio, dprCap);
   canvas.width  = Math.round(window.innerWidth  * dpr);
   canvas.height = Math.round(window.innerHeight * dpr);
 }
@@ -146,8 +153,12 @@ const DB_BANDS = [
   { key: 'subBass', label: 'SUB',   color: '#ffdd44' },
 ];
 
-function updateDebug(bands, harm) {
+function updateDebug(bands, harm, st) {
   if (debugEl.classList.contains('hidden')) return;
+  if (st) {
+    document.getElementById('db-bar-tension').style.width = (st.tension * 100).toFixed(1) + '%';
+    document.getElementById('db-val-struct').textContent  = st.state;
+  }
   DB_BANDS.forEach(({ key, color }) => {
     const val = bands[key] ?? 0;
     document.getElementById(`db-bar-${key}`).style.width = (val * 100).toFixed(1) + '%';
@@ -178,6 +189,18 @@ const params = {
   pulse:      0,   // 0→1 note-attack flash (from HarmonyAnalyzer)
   dissonance:         0,   // 0 consonant → 1 dissonant (from HarmonyAnalyzer)
   dissonanceStrength: 1,   // user-controlled multiplier for the dissonance visual effect
+  keyHue:  0,      // 0..1 tonic hue on the circle of fifths (from HarmonyAnalyzer)
+  keyConf: 0,      // 0..1 key detection confidence
+  trail:   0.5,    // 0 = no trails, 1 = very long light trails
+  glow:    1,      // bloom post-process strength
+  trailBias: 0,    // AutoVJ section bias added to trail (breakdowns float)
+  tension:   0,    // structure: build-up 0..1
+  dropPulse: 0,    // structure: drop shockwave
+  driftScale: 1, driftRot: 0, driftX: 0, driftY: 0,   // generative drift
+  sceneSeed: 0,    // re-rolls all time-driven field layouts
+  paletteMode: 0,  // palette director: mono/duotone/complementary/analogous
+  kaleidoK: 0,     // kaleidoscope segments (0 = off), picked per scene
+  camZoom: 1, camRot: 0,   // composite-pass camera
 };
 
 function bindSlider(id, valId, key) {
@@ -194,6 +217,8 @@ bindSlider('sl-mid',    'v-mid',    'mulMid');
 bindSlider('sl-high',   'v-high',   'mulHigh');
 bindSlider('sl-spring',      'v-spring',      'spring');
 bindSlider('sl-dissonance',  'v-dissonance',  'dissonanceStrength');
+bindSlider('sl-trail',       'v-trail',       'trail');
+bindSlider('sl-glow',        'v-glow',        'glow');
 
 btnTune.addEventListener('click', () => {
   const hidden = tunePanel.classList.toggle('hidden');
@@ -205,7 +230,7 @@ btnTune.addEventListener('click', () => {
 // ── Reset to defaults ────────────────────────────────────────────────
 const DEFAULTS = {
   mulSb: 1, mulBass: 3, mulMid: 1, mulHigh: 1, spring: 0.3,
-  dissonanceStrength: 1,
+  dissonanceStrength: 1, trail: 0.5, glow: 1,
   modeDrums: 1, modeBass: 0, modeLead: 0, modeAtmos: 0, modePads: 0,
 };
 
@@ -218,6 +243,8 @@ function resetToDefaults() {
     ['sl-high',       'v-high',       'mulHigh'],
     ['sl-spring',     'v-spring',     'spring'],
     ['sl-dissonance', 'v-dissonance', 'dissonanceStrength'],
+    ['sl-trail',      'v-trail',      'trail'],
+    ['sl-glow',       'v-glow',       'glow'],
   ].forEach(([slId, vlId, key]) => {
     const sl = document.getElementById(slId);
     const vl = document.getElementById(vlId);
@@ -243,6 +270,8 @@ function randomizeTune() {
     mulHigh:            rnd(0.2, 3.0),
     spring:             rnd(0.05, 1.0),
     dissonanceStrength: rnd(0.0, 2.5),
+    trail:              rnd(0.0, 0.85),
+    glow:               rnd(0.3, 1.8),
     modeDrums: pick([0,1,2,3]),
     modeBass:  pick([0,1,2,3,4]),
     modeLead:  pick([0,1,2,3]),
@@ -259,6 +288,8 @@ function randomizeTune() {
     ['sl-high',       'v-high',       'mulHigh'],
     ['sl-spring',     'v-spring',     'spring'],
     ['sl-dissonance', 'v-dissonance', 'dissonanceStrength'],
+    ['sl-trail',      'v-trail',      'trail'],
+    ['sl-glow',       'v-glow',       'glow'],
   ].forEach(([slId, vlId, key]) => {
     const sl = document.getElementById(slId);
     const vl = document.getElementById(vlId);
@@ -431,9 +462,28 @@ TRAIN_BANDS.forEach(k => {
   });
 });
 
+// Tap-tempo: TRAIN taps are rhythmic by design ("tap in rhythm with the
+// instrument") — a steady series doubles as a tempo hint for the BeatTracker.
+// Born from a user instinctively tapping the kick to fix a half-tempo lock.
+const _tapTimes = [];
+function registerTapTempo() {
+  const now = performance.now();
+  if (_tapTimes.length && now - _tapTimes[_tapTimes.length - 1] > 3000) _tapTimes.length = 0;
+  _tapTimes.push(now);
+  if (_tapTimes.length < 4) return;
+  const recent = _tapTimes.slice(-8);
+  const ints   = recent.slice(1).map((t, i) => t - recent[i]);
+  const median = [...ints].sort((a, b) => a - b)[ints.length >> 1];
+  if (ints.every(iv => Math.abs(iv - median) / median < 0.18)) {
+    beat.tapHint(60000 / median, now / 1000);
+    posthog.capture('tap_tempo_hint', { bpm: Math.round(60000 / median) });
+  }
+}
+
 document.getElementById('train-tap').addEventListener('click', () => {
   if (!trainTarget) return;
   audio.recordTap();
+  registerTapTempo();
   updateTrainUI();
 });
 
@@ -457,6 +507,7 @@ window.addEventListener('keydown', e => {
   if (e.code === 'Space' && trainTarget && !trainPanel.classList.contains('hidden')) {
     e.preventDefault();
     audio.recordTap();
+    registerTapTempo();
     // Flash the TAP button
     const tapBtn = document.getElementById('train-tap');
     tapBtn.classList.add('flash');
@@ -480,12 +531,52 @@ const midi     = new MIDIHandler({
   onNoteOff: (pitch) => harmony.noteOff(pitch),
 });
 
+// ── Structure + AutoVJ + generative drift + genre presets ───────────
+const structure = new StructureAnalyzer();
+const drift     = new GenerativeDrift();
+const autovj    = new AutoVJ(params, {
+  onModeChange: (band, mode) => {
+    const sel = document.getElementById(`mode-${band}`);
+    if (sel) sel.value = String(mode);
+  },
+});
+
+const genreSelect = document.getElementById('genre-select');
+const btnVj       = document.getElementById('btn-vj');
+
+function applyGenre(key) {
+  const g = GENRES[key] ?? GENRES.auto;
+  audio.setBandRanges(g.bands);
+  beat.setTempoPrior(g.tempo.center, g.tempo.sigma);
+  autovj.setGenre(g);
+  // Genre aesthetic defaults → params + sliders
+  for (const [k, slId, vlId] of [['trail', 'sl-trail', 'v-trail'], ['glow', 'sl-glow', 'v-glow']]) {
+    params[k] = g.defaults[k];
+    const sl = document.getElementById(slId), vl = document.getElementById(vlId);
+    if (sl) { sl.value = g.defaults[k]; vl.textContent = g.defaults[k].toFixed(2); }
+  }
+  genreSelect.classList.toggle('set', key !== 'auto');
+  posthog.capture('genre_changed', { genre: key });
+}
+
+genreSelect.addEventListener('change', () => applyGenre(genreSelect.value));
+
+btnVj.addEventListener('click', () => {
+  autovj.enabled = !autovj.enabled;
+  btnVj.classList.toggle('active', autovj.enabled);
+  posthog.capture('autovj_toggled', { on: autovj.enabled });
+});
+
+// Debug/test handle — lets automated tests read live analysis state
+window.__bloom = { beat, harmony, audio, params, structure, autovj, drift };
+
 // ── Preset / mode ────────────────────────────────────────────────────
-let currentMode = 'particles';  // 'particles' | 'oscilloscope' | 'ascii'
+let currentMode = 'particles';  // 'particles' | 'oscilloscope' | 'ascii' | 'silk' | 'flora'
 
 function onConnected(label) {
   statusAudio.textContent = `Audio: ${label}`;
   statusAudio.classList.add('active');
+  drift.reseed();   // each source/track gets its own generative character
   setTimeout(() => uiEl.classList.add('faded'), 1800);
 }
 
@@ -499,19 +590,31 @@ async function init() {
     return;
   }
 
-  // Mode switch: particles ↔ oscilloscope ↔ ascii
-  const MODES = { particles: ParticlesPreset, oscilloscope: OscilloscopePreset, ascii: AsciiPreset };
+  // Mode switch: particles ↔ oscilloscope ↔ ascii ↔ silk ↔ flora
+  const MODES = {
+    particles:    ParticlesPreset,
+    oscilloscope: OscilloscopePreset,
+    ascii:        AsciiPreset,
+    silk:         SilkPreset,
+    flora:        FloraPreset,
+  };
+  const btnSilk  = document.getElementById('btn-silk');
+  const btnFlora = document.getElementById('btn-flora');
 
   async function setMode(mode) {
     currentMode = mode;
     await renderer.loadPreset(MODES[mode]);
     btnOscillo.classList.toggle('active', mode === 'oscilloscope');
     btnAscii.classList.toggle('active',   mode === 'ascii');
+    btnSilk.classList.toggle('active',    mode === 'silk');
+    btnFlora.classList.toggle('active',   mode === 'flora');
     posthog.capture('mode_changed', { mode });
   }
 
   btnOscillo.addEventListener('click', () => setMode(currentMode === 'oscilloscope' ? 'particles' : 'oscilloscope'));
   btnAscii.addEventListener('click',   () => setMode(currentMode === 'ascii'        ? 'particles' : 'ascii'));
+  btnSilk.addEventListener('click',    () => setMode(currentMode === 'silk'         ? 'particles' : 'silk'));
+  btnFlora.addEventListener('click',   () => setMode(currentMode === 'flora'        ? 'particles' : 'flora'));
 
   btnMidi.addEventListener('click', async () => {
     try {
@@ -538,14 +641,22 @@ async function init() {
     btnRippleColor.style.borderColor = `rgba(${r},${g},${b},0.5)`;
   });
 
+  function showAudioError(e) {
+    statusAudio.textContent = 'Audio: ' + (e.name === 'NotAllowedError' ? 'cancelled' : e.message);
+    statusAudio.classList.remove('active');
+    statusAudio.classList.add('error');
+  }
+
   btnSystem.addEventListener('click', async () => {
+    statusAudio.classList.remove('error');
     try { await audio.connectSystemAudio(); onConnected('system'); posthog.capture('audio_connected', { source: 'system' }); }
-    catch (e) { console.error('System audio:', e); }
+    catch (e) { console.error('System audio:', e); showAudioError(e); posthog.capture('audio_connect_failed', { source: 'system', error: e.message }); }
   });
 
   btnMic.addEventListener('click', async () => {
+    statusAudio.classList.remove('error');
     try { await audio.connectMicrophone(); onConnected('microphone'); posthog.capture('audio_connected', { source: 'microphone' }); }
-    catch (e) { console.error('Mic:', e); }
+    catch (e) { console.error('Mic:', e); showAudioError(e); posthog.capture('audio_connect_failed', { source: 'microphone', error: e.message }); }
   });
 
   btnFile.addEventListener('click', () => fileInput.click());
@@ -698,8 +809,30 @@ async function init() {
   });
 
   let lastFrameTs = 0;
+  let fieldMs     = 0;   // tension-warped clock for the shader: builds run hot
+  let _kaleidoSpin = 0;
+
+  // Adaptive resolution: when frame time sags, step render scale down
+  // (1.5 → 1.0 dpr) before the sag becomes visible stutter; recover slowly.
+  let _frameEmaMs = 16.7;
+  let _lastDprAdjust = 0;
+  function adaptDpr(ts, dtMs) {
+    _frameEmaMs = _frameEmaMs * 0.95 + dtMs * 0.05;
+    if (ts - _lastDprAdjust < 2000) return;
+    if (_frameEmaMs > 19 && dprCap > 1.0) {
+      dprCap = Math.max(1.0, dprCap - 0.25);
+      _lastDprAdjust = ts;
+      resize();
+    } else if (_frameEmaMs < 13 && dprCap < 1.5 && ts - _lastDprAdjust > 10000) {
+      dprCap = Math.min(1.5, dprCap + 0.25);
+      _lastDprAdjust = ts;
+      resize();
+    }
+  }
+
   function frame(ts) {
     const dtS = Math.min(ts - (lastFrameTs || ts), 50) / 1000;
+    adaptDpr(ts, dtS * 1000);
     lastFrameTs = ts;
 
     const rawBands = audio.update();
@@ -721,18 +854,42 @@ async function init() {
     params.tonality   = harm.tonality;
     params.pulse      = harm.pulse;
     params.dissonance = harm.dissonance;
+    params.keyHue     = harm.keyHue;
+    params.keyConf    = harm.keyConf;
+
+    // Structure → AutoVJ → generative drift
+    const st = structure.update(rawBands, beat, dtS);
+    autovj.update(st);
+    drift.update(dtS, fftEnergy);
+    params.tension    = st.tension;
+    params.dropPulse  = st.dropPulse;
+    params.driftScale = drift.scale;
+    params.driftRot   = drift.rot;
+    // Composition centre = slow generative wander + the scene's committed offset
+    params.driftX     = drift.offX + (params.sceneOffX ?? 0);
+    params.driftY     = drift.offY + (params.sceneOffY ?? 0);
+
+    // Composite camera: builds punch in, drops kick, drift breathes slowly.
+    // An active kaleidoscope gets a constant slow spin — static mandalas bore.
+    if (params.kaleidoK >= 2) _kaleidoSpin += dtS * 0.06;
+    params.camZoom = 1 + st.tension * 0.15 + st.dropPulse * 0.25
+                   + Math.max(0, (drift.scale - 1.05)) * 0.30;
+    params.camRot  = drift.rot * 0.35 + _kaleidoSpin;
 
     params.rippleData = ripples.getUniforms();
     ripples.update();
 
-    updateDebug(bands, harm);
+    updateDebug(bands, harm, st);
 
     // Push stereo waveform to oscilloscope preset if active
     if (currentMode === 'oscilloscope' && renderer.preset && audio.waveformL) {
       renderer.preset.pushFrame(audio.waveformL, audio.waveformR);
     }
 
-    renderer.render(ts, bands, params);
+    // Warped clock: tension accelerates all field motion, monotonic so the
+    // field phase never jumps when tension eases off
+    fieldMs += dtS * 1000 * (1 + st.tension * 0.6);
+    renderer.render(fieldMs, bands, params);
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
