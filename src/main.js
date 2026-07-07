@@ -14,6 +14,7 @@ import { AsciiPreset }        from './presets/ascii.js';
 import { SilkPreset }         from './presets/silk.js';
 import { FloraPreset }        from './presets/flora.js';
 import { FluidPreset, FerroPreset } from './presets/fluid.js';
+import { WledSync }           from './wled.js';
 import posthogLib from 'posthog-js';
 
 // Analytics key comes from the environment (.env.local / Vercel env) — never
@@ -576,6 +577,30 @@ btnVj.addEventListener('click', () => {
   posthog.capture('autovj_toggled', { on: autovj.enabled });
 });
 
+// ── WLED strip mirror (needs the local relay: node tools/wled-relay.mjs) ──
+const wled    = new WledSync(canvas);
+const btnWled = document.getElementById('btn-wled');
+
+btnWled.addEventListener('click', async () => {
+  if (wled.active) {
+    wled.stop();
+    btnWled.classList.remove('active');
+    return;
+  }
+  btnWled.textContent = '...';
+  try {
+    const info = await wled.start();
+    btnWled.textContent = 'WLED';
+    btnWled.classList.add('active');
+    btnWled.title = `Mirroring to "${info.name}" (${info.leds} LEDs)`;
+    posthog.capture('wled_connected', { leds: info.leds });
+  } catch (e) {
+    btnWled.textContent = 'WLED ✕';
+    btnWled.title = `Relay not reachable — run: node tools/wled-relay.mjs <wled-ip>  (${e.message})`;
+    setTimeout(() => { btnWled.textContent = 'WLED'; }, 2500);
+  }
+});
+
 // Debug/test handle — lets automated tests read live analysis state
 window.__bloom = { beat, harmony, audio, params, structure, autovj, drift };
 
@@ -933,6 +958,9 @@ async function init() {
     // field phase never jumps when tension eases off
     fieldMs += dtS * 1000 * (1 + st.tension * 0.6);
     renderer.render(fieldMs, bands, params);
+    wled.update(ts);
+    // If the relay died mid-stream WledSync gives up on its own — reflect that
+    if (!wled.active && btnWled.classList.contains('active')) btnWled.classList.remove('active');
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
