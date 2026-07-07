@@ -13,12 +13,18 @@ import { OscilloscopePreset } from './presets/oscilloscope.js';
 import { AsciiPreset }        from './presets/ascii.js';
 import { SilkPreset }         from './presets/silk.js';
 import { FloraPreset }        from './presets/flora.js';
-import posthog from 'posthog-js';
+import posthogLib from 'posthog-js';
 
-posthog.init('VITE_POSTHOG_KEY_REDACTED', {
-  api_host: 'https://us.i.posthog.com',
-  autocapture: false,
-});
+// Analytics key comes from the environment (.env.local / Vercel env) — never
+// hardcode it: the client bundle is public. Without a key, analytics no-op.
+const POSTHOG_KEY = import.meta.env.VITE_POSTHOG_KEY;
+const posthog = POSTHOG_KEY ? posthogLib : { capture: () => {} };
+if (POSTHOG_KEY) {
+  posthogLib.init(POSTHOG_KEY, {
+    api_host: 'https://us.i.posthog.com',
+    autocapture: false,
+  });
+}
 const _sessionStart = Date.now();
 
 const canvas      = document.getElementById('canvas');
