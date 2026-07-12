@@ -19,6 +19,8 @@ import { CymaticsPreset }     from './presets/cymatics.js';
 import { StormPreset }        from './presets/storm.js';
 import { TerraPreset }        from './presets/terra.js';
 import { SwarmPreset }        from './presets/swarm.js';
+import { CityPreset }         from './presets/city.js';
+import { GalaxyPreset }       from './presets/galaxy.js';
 import { WledSync }           from './wled.js';
 import posthogLib from 'posthog-js';
 
@@ -750,6 +752,8 @@ async function init() {
     storm:        StormPreset,
     terra:        TerraPreset,
     swarm:        SwarmPreset,
+    city:         CityPreset,
+    galaxy:       GalaxyPreset,
   };
   const modeSelect = document.getElementById('mode-select');
 
@@ -792,8 +796,8 @@ async function init() {
   // ── AutoVJ preset rotation: whole worlds rotate on big musical borders ──
   // (drops sometimes, every 16 phrases otherwise). Backs off for 45 s after
   // a manual pick so the user always wins.
-  // swarm joins the pool once its preset lands (stub renders black)
-  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra'];
+  // city/galaxy join the pool once their presets land (stubs render black)
+  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm'];
   let _phrasesSincePreset = 0;
 
   function rotatePreset(style) {
