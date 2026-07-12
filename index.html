@@ -301,6 +301,21 @@
     }
     #genre-select:hover { opacity: 0.65; }
     #genre-select.set   { opacity: 0.85; border-color: rgba(255,255,255,0.35); }
+    #mode-select {
+      padding: 5px 8px;
+      font-size: 0.62rem;
+      letter-spacing: 0.10em;
+      opacity: 0.35;
+      transition: opacity 0.2s;
+      background: rgba(0,0,0,0.4);
+      color: #ccc;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 4px;
+      font-family: inherit;
+      cursor: pointer;
+      -webkit-appearance: none;
+    }
+    #mode-select:hover { opacity: 0.75; }
     #wled-host {
       width: 106px;
       padding: 5px 8px;
@@ -841,12 +856,18 @@
   <button id="btn-debug">DEBUG</button>
   <button id="btn-color">COLOR</button>
   <button id="btn-train">TRAIN</button>
-  <button id="btn-oscillo">SCOPE</button>
-  <button id="btn-ascii">ASCII</button>
-  <button id="btn-silk">SILK</button>
-  <button id="btn-flora">FLORA</button>
-  <button id="btn-fluid">INK</button>
-  <button id="btn-ferro">FERRO</button>
+  <select id="mode-select" title="Visual mode">
+    <option value="particles" selected>BLOOM</option>
+    <option value="oscilloscope">SCOPE</option>
+    <option value="ascii">ASCII</option>
+    <option value="silk">SILK</option>
+    <option value="flora">FLORA</option>
+    <option value="fluid">INK</option>
+    <option value="ferro">FERRO</option>
+    <option value="void">VOID</option>
+    <option value="cymatics">CYMATICS</option>
+    <option value="storm">STORM</option>
+  </select>
   <button id="btn-bpm">BPM</button>
   <select id="genre-select" title="Genre preset — tunes detection and visuals">
     <option value="auto" selected>AUTO</option>

@@ -14,6 +14,9 @@ import { AsciiPreset }        from './presets/ascii.js';
 import { SilkPreset }         from './presets/silk.js';
 import { FloraPreset }        from './presets/flora.js';
 import { FluidPreset, FerroPreset } from './presets/fluid.js';
+import { VoidPreset }         from './presets/void.js';
+import { CymaticsPreset }     from './presets/cymatics.js';
+import { StormPreset }        from './presets/storm.js';
 import { WledSync }           from './wled.js';
 import posthogLib from 'posthog-js';
 
@@ -43,8 +46,6 @@ const btnTrain    = document.getElementById('btn-train');
 const trainPanel  = document.getElementById('train');
 const btnMidi          = document.getElementById('btn-midi');
 const statusMidi       = document.getElementById('status-midi');
-const btnOscillo       = document.getElementById('btn-oscillo');
-const btnAscii         = document.getElementById('btn-ascii');
 const btnRippleColor   = document.getElementById('btn-ripple-color');
 const rippleColorInput = document.getElementById('ripple-color-input');
 
@@ -324,7 +325,7 @@ const TUTORIAL_STEPS = [
   { el: '#btn-system',       title: 'Audio Source',      text: 'System Audio captures everything playing on your Mac, no driver needed. Or use Microphone, or load a file.\n\nEach audio band (bass, drums, melody) drives its own particle layer independently.' },
   { el: '#btn-tune',         title: 'Tune',              text: 'Open this panel to mute or solo each instrument band, switch movement styles (Burst, Shockwave…), or adjust sensitivity sliders.\n\nThe Bass slider controls how many particles are visible.' },
   { el: '#btn-color',        title: 'Band Colors',       text: 'Toggle debug colors:\nRed = drums\nBlue = bass\nGreen = lead\nMagenta = atmosphere\nOrange = pads\n\nUseful for tuning your mix.' },
-  { el: '#btn-oscillo',      title: 'Oscilloscope',      text: 'Switch to waveform mode to see the raw stereo audio signal instead of particles.' },
+  { el: '#mode-select',      title: 'Visual modes',      text: 'Pick a world: particles, silk ribbons, liquid metal, a fractal cathedral, sand resonance figures, a thunderstorm and more.' },
   { el: '#btn-train',        title: 'Train',             text: 'Teach Bloom which frequencies belong to which instrument by tapping along in rhythm with each band.\n\nHelps when automatic detection is off.' },
   { el: '#btn-ripple-color', title: 'Ripple Color',      text: 'Pick the accent color for MIDI note ripple waves using this color swatch.' },
 ];
@@ -645,30 +646,21 @@ async function init() {
     flora:        FloraPreset,
     fluid:        FluidPreset,
     ferro:        FerroPreset,
+    void:         VoidPreset,
+    cymatics:     CymaticsPreset,
+    storm:        StormPreset,
   };
-  const btnSilk  = document.getElementById('btn-silk');
-  const btnFlora = document.getElementById('btn-flora');
-  const btnFluid = document.getElementById('btn-fluid');
-  const btnFerro = document.getElementById('btn-ferro');
+  const modeSelect = document.getElementById('mode-select');
 
   async function setMode(mode) {
     currentMode = mode;
     await renderer.loadPreset(MODES[mode]);
-    btnOscillo.classList.toggle('active', mode === 'oscilloscope');
-    btnAscii.classList.toggle('active',   mode === 'ascii');
-    btnSilk.classList.toggle('active',    mode === 'silk');
-    btnFlora.classList.toggle('active',   mode === 'flora');
-    btnFluid.classList.toggle('active',   mode === 'fluid');
-    btnFerro.classList.toggle('active',   mode === 'ferro');
+    modeSelect.value = mode;
     posthog.capture('mode_changed', { mode });
   }
+  window.__setMode = setMode;   // tests + future AutoVJ preset rotation
 
-  btnOscillo.addEventListener('click', () => setMode(currentMode === 'oscilloscope' ? 'particles' : 'oscilloscope'));
-  btnAscii.addEventListener('click',   () => setMode(currentMode === 'ascii'        ? 'particles' : 'ascii'));
-  btnSilk.addEventListener('click',    () => setMode(currentMode === 'silk'         ? 'particles' : 'silk'));
-  btnFlora.addEventListener('click',   () => setMode(currentMode === 'flora'        ? 'particles' : 'flora'));
-  btnFluid.addEventListener('click',   () => setMode(currentMode === 'fluid'        ? 'particles' : 'fluid'));
-  btnFerro.addEventListener('click',   () => setMode(currentMode === 'ferro'        ? 'particles' : 'ferro'));
+  modeSelect.addEventListener('change', () => setMode(modeSelect.value));
 
   btnMidi.addEventListener('click', async () => {
     try {
@@ -693,8 +685,8 @@ async function init() {
     const g = parseInt(hex.slice(3, 5), 16) / 255;
     const b = parseInt(hex.slice(5, 7), 16) / 255;
     params.asciiColor = [r, g, b];
-    btnAsciiColor.style.background  = `rgba(-e,-e,-e,0.35)`;
-    btnAsciiColor.style.borderColor = `rgba(-e,-e,-e,0.65)`;
+    btnAsciiColor.style.background  = hex + '59';   // 35% alpha
+    btnAsciiColor.style.borderColor = hex + 'a6';   // 65% alpha
     posthog.capture('ascii_color_changed', { color: hex });
   });
 
