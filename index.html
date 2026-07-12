@@ -607,7 +607,7 @@
       display: flex;
       gap: 6px;
     }
-    #btn-reset-tune, #btn-random-tune {
+    #btn-reset-tune, #btn-random-tune, #btn-midi-map {
       flex: 1;
       padding: 7px;
       font-size: 0.60rem;
@@ -616,7 +616,13 @@
       transition: opacity 0.2s;
       border-radius: 5px;
     }
-    #btn-reset-tune:hover, #btn-random-tune:hover { opacity: 0.65; }
+    #btn-reset-tune:hover, #btn-random-tune:hover, #btn-midi-map:hover { opacity: 0.65; }
+    #btn-midi-map.active {
+      opacity: 1;
+      color: #88d8ff;
+      border-color: rgba(120, 200, 255, 0.55);
+      background: rgba(120, 200, 255, 0.12);
+    }
 
     /* ── Tutorial ───────────────────────────────────────────────── */
     #btn-help {
@@ -1004,6 +1010,7 @@
   <div class="tune-actions">
     <button id="btn-reset-tune">RESET</button>
     <button id="btn-random-tune">RANDOM</button>
+    <button id="btn-midi-map" title="MIDI learn: arm, click a slider, turn a knob">MAP</button>
   </div>
 </div>
 

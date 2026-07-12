@@ -542,7 +542,63 @@ const midi     = new MIDIHandler({
     lastMidiMs = performance.now();
   },
   onNoteOff: (pitch) => harmony.noteOff(pitch),
+  onCC:      (cc, value) => handleMidiCC(cc, value),
 });
+
+// ── MIDI learn: hardware knobs → Tune sliders ────────────────────────
+// MAP arms learn mode; click a slider, turn a knob — bound. Bindings feed
+// values through the sliders' normal input events, so every existing
+// wiring (params, labels) works unchanged. Persisted in localStorage.
+let midiMap  = {};   // cc number → slider element id
+try { midiMap = JSON.parse(localStorage.getItem('bloom-midi-map') ?? '{}'); } catch (_) {}
+let mapArmed = false;
+let learnTarget = null;
+
+function handleMidiCC(cc, value) {
+  if (mapArmed && learnTarget) {
+    midiMap[cc] = learnTarget;
+    localStorage.setItem('bloom-midi-map', JSON.stringify(midiMap));
+    const el = document.getElementById(learnTarget);
+    if (el) el.style.outline = '';
+    learnTarget = null;
+    const btn = document.getElementById('btn-midi-map');
+    btn.textContent = 'MAP ✓';
+    setTimeout(() => { btn.textContent = mapArmed ? 'MAP…' : 'MAP'; }, 900);
+    return;
+  }
+  const id = midiMap[cc];
+  if (!id) return;
+  const sl = document.getElementById(id);
+  if (!sl) return;
+  const min = parseFloat(sl.min), max = parseFloat(sl.max);
+  sl.value = min + (value / 127) * (max - min);
+  sl.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function initMidiLearn() {
+  const btn = document.getElementById('btn-midi-map');
+  btn.addEventListener('click', () => {
+    mapArmed = !mapArmed;
+    btn.classList.toggle('active', mapArmed);
+    btn.textContent = mapArmed ? 'MAP…' : 'MAP';
+    if (!mapArmed && learnTarget) {
+      const el = document.getElementById(learnTarget);
+      if (el) el.style.outline = '';
+      learnTarget = null;
+    }
+  });
+  // While armed, clicking any Tune slider selects it as the learn target
+  document.getElementById('tune').addEventListener('pointerdown', (e) => {
+    if (!mapArmed || e.target.type !== 'range') return;
+    if (learnTarget) {
+      const prev = document.getElementById(learnTarget);
+      if (prev) prev.style.outline = '';
+    }
+    learnTarget = e.target.id;
+    e.target.style.outline = '1px solid rgba(120,200,255,0.8)';
+  });
+}
+initMidiLearn();
 
 // ── Structure + AutoVJ + generative drift + genre presets ───────────
 const structure = new StructureAnalyzer();
@@ -617,7 +673,7 @@ btnWled.addEventListener('click', async () => {
 wledHost.addEventListener('keydown', e => { if (e.key === 'Enter') btnWled.click(); });
 
 // Debug/test handle — lets automated tests read live analysis state
-window.__bloom = { beat, harmony, audio, params, structure, autovj, drift };
+window.__bloom = { beat, harmony, audio, params, structure, autovj, drift, midiCC: handleMidiCC };
 
 // ── Preset / mode ────────────────────────────────────────────────────
 let currentMode = 'particles';  // 'particles' | 'oscilloscope' | 'ascii' | 'silk' | 'flora'

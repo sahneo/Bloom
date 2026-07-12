@@ -8,9 +8,10 @@
 // ---------------------------------------------------------------------------
 
 export class MIDIHandler {
-  constructor({ onNoteOn, onNoteOff }) {
+  constructor({ onNoteOn, onNoteOff, onCC }) {
     this.onNoteOn  = onNoteOn;
     this.onNoteOff = onNoteOff;
+    this.onCC      = onCC ?? (() => {});
     this._access   = null;
   }
 
@@ -55,6 +56,8 @@ export class MIDIHandler {
       this.onNoteOn(pitch, velocity, channel);
     } else if (type === 0x80 || (type === 0x90 && velocity === 0)) {
       this.onNoteOff(pitch, channel);
+    } else if (type === 0xb0) {
+      this.onCC(pitch, velocity, channel);   // controller knobs/faders
     }
   }
 
