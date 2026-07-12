@@ -792,8 +792,8 @@ async function init() {
   // ── AutoVJ preset rotation: whole worlds rotate on big musical borders ──
   // (drops sometimes, every 16 phrases otherwise). Backs off for 45 s after
   // a manual pick so the user always wins.
-  // terra/swarm join the pool once their presets land (stubs render black)
-  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm'];
+  // swarm joins the pool once its preset lands (stub renders black)
+  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra'];
   let _phrasesSincePreset = 0;
 
   function rotatePreset(style) {
