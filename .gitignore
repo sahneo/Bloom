@@ -5,3 +5,4 @@ dist/
 
 .env.local
 .env
+public/_t_*.wav
