@@ -17,6 +17,8 @@ import { FluidPreset, FerroPreset } from './presets/fluid.js';
 import { VoidPreset }         from './presets/void.js';
 import { CymaticsPreset }     from './presets/cymatics.js';
 import { StormPreset }        from './presets/storm.js';
+import { TerraPreset }        from './presets/terra.js';
+import { SwarmPreset }        from './presets/swarm.js';
 import { WledSync }           from './wled.js';
 import posthogLib from 'posthog-js';
 
@@ -649,6 +651,8 @@ async function init() {
     void:         VoidPreset,
     cymatics:     CymaticsPreset,
     storm:        StormPreset,
+    terra:        TerraPreset,
+    swarm:        SwarmPreset,
   };
   const modeSelect = document.getElementById('mode-select');
 
@@ -658,9 +662,57 @@ async function init() {
     modeSelect.value = mode;
     posthog.capture('mode_changed', { mode });
   }
-  window.__setMode = setMode;   // tests + future AutoVJ preset rotation
+  window.__setMode = setMode;   // tests + AutoVJ preset rotation
 
-  modeSelect.addEventListener('change', () => setMode(modeSelect.value));
+  // Cinematic switch: 'fade' dips through black (phrase boundaries, manual
+  // picks), 'flash' hides the cut inside a white drop flash (drops)
+  let _switching = false;
+  async function switchModeCinematic(mode, style = 'fade') {
+    if (_switching || mode === currentMode) return;
+    _switching = true;
+    try {
+      if (style === 'flash') {
+        params.dropFlash = Math.max(params.dropFlash ?? 0, 0.9);
+        await setMode(mode);
+      } else {
+        canvas.style.transition = 'opacity 0.45s ease';
+        canvas.style.opacity = '0';
+        await new Promise(r => setTimeout(r, 460));
+        await setMode(mode);
+        canvas.style.opacity = '1';
+      }
+    } finally {
+      _switching = false;
+    }
+  }
+
+  let lastManualModeMs = 0;
+  modeSelect.addEventListener('change', () => {
+    lastManualModeMs = performance.now();
+    switchModeCinematic(modeSelect.value, 'fade');
+  });
+
+  // ── AutoVJ preset rotation: whole worlds rotate on big musical borders ──
+  // (drops sometimes, every 16 phrases otherwise). Backs off for 45 s after
+  // a manual pick so the user always wins.
+  // terra/swarm join the pool once their presets land (stubs render black)
+  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm'];
+  let _phrasesSincePreset = 0;
+
+  function rotatePreset(style) {
+    const options = VJ_PRESET_POOL.filter(m => m !== currentMode && MODES[m]);
+    const next = options[(Math.random() * options.length) | 0];
+    _phrasesSincePreset = 0;
+    switchModeCinematic(next, style);
+  }
+
+  function autoRotate(st) {
+    if (!autovj.enabled || _switching) return;
+    if (performance.now() - lastManualModeMs < 45000) return;
+    if (st.onPhrase && ++_phrasesSincePreset >= 16) rotatePreset('fade');
+    else if (st.onDrop && Math.random() < 0.35) rotatePreset('flash');
+  }
+  window.__autoRotate = { rotatePreset };   // test hook
 
   btnMidi.addEventListener('click', async () => {
     try {
@@ -920,6 +972,7 @@ async function init() {
     // Structure → AutoVJ → generative drift
     const st = structure.update(rawBands, beat, dtS);
     autovj.update(st, dtS);
+    autoRotate(st);
     drift.update(dtS, fftEnergy);
     params.tension    = st.tension;
     params.dropPulse  = st.dropPulse;
