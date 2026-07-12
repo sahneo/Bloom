@@ -672,6 +672,47 @@ btnWled.addEventListener('click', async () => {
 });
 wledHost.addEventListener('keydown', e => { if (e.key === 'Enter') btnWled.click(); });
 
+// ── Projector: mirror the canvas into a clean second window ──────────
+// canvas.captureStream costs nothing extra on the GPU — the projector
+// window is just a fullscreen <video>. Drag it to the second display and
+// double-click for fullscreen; the main window keeps all controls.
+const btnProj = document.getElementById('btn-proj');
+let projWin = null;
+
+btnProj.addEventListener('click', () => {
+  if (projWin && !projWin.closed) {
+    projWin.close();
+    projWin = null;
+    btnProj.classList.remove('active');
+    return;
+  }
+  projWin = window.open('', 'bloom-projector', 'width=960,height=540');
+  if (!projWin) return;   // popup blocked
+  projWin.document.write(
+    '<!DOCTYPE html><title>Bloom — Projector</title>' +
+    '<style>html,body{margin:0;height:100%;background:#000;overflow:hidden;cursor:none}' +
+    'video{width:100vw;height:100vh;object-fit:contain}</style>' +
+    '<body title="Double-click for fullscreen"></body>');
+  const v = projWin.document.createElement('video');
+  v.muted = true;
+  v.autoplay = true;
+  v.srcObject = canvas.captureStream(60);
+  projWin.document.body.appendChild(v);
+  projWin.document.body.addEventListener('dblclick', () => {
+    if (projWin.document.fullscreenElement) projWin.document.exitFullscreen();
+    else projWin.document.body.requestFullscreen();
+  });
+  btnProj.classList.add('active');
+  const watch = setInterval(() => {
+    if (!projWin || projWin.closed) {
+      clearInterval(watch);
+      btnProj.classList.remove('active');
+      projWin = null;
+    }
+  }, 1500);
+  posthog.capture('projector_opened');
+});
+
 // Debug/test handle — lets automated tests read live analysis state
 window.__bloom = { beat, harmony, audio, params, structure, autovj, drift, midiCC: handleMidiCC };
 
