@@ -114,13 +114,16 @@ export class FxPreset {
 
     const e = this._extra;
     e[28] = params.fxEffect ?? 0;
-    e[29] = params.fxAmount ?? 1;
-    e[30] = params.fxScale  ?? 0.5;
-    e[31] = this._kickEnv;
-    e[60] = this._snareEnv;
-    e[61] = this._invert;
-    e[62] = texAspect || 1.77;
-    e[63] = texAspect > 0 ? 1 : 0;
+    e[29] = params.fxReact  ?? 1;
+    e[30] = this._kickEnv;
+    e[31] = this._snareEnv;
+    const fp = params.fxP ?? [0.5, 0.5, 0.5, 0.5, 0.5, 0.5];
+    e[44] = fp[0]; e[45] = fp[1]; e[46] = fp[2]; e[47] = fp[3];
+    e[48] = fp[4] ?? 0.5;
+    e[49] = fp[5] ?? 0.5;
+    e[50] = this._invert;
+    e[51] = texAspect > 0 ? 1 : 0;
+    e[52] = texAspect || 1.77;
 
     const u = buildUniforms(bands, timeMs, deltaMs, params, this.canvas, this.frameCount, 1);
     device.queue.writeBuffer(this.uniformBuffer, 0, u);

@@ -879,14 +879,51 @@ async function init() {
   }
   document.getElementById('gl-spec').addEventListener('change', e => { params.glSpec = e.target.checked; });
   document.getElementById('gl-shape').addEventListener('change', e => { params.glShape = parseInt(e.target.value, 10); });
-  document.getElementById('fx-effect').addEventListener('change', e => { params.fxEffect = parseInt(e.target.value, 10); });
-  for (const [id, key, vid] of [['fx-amount', 'fxAmount', 'fx-v-amount'], ['fx-scale', 'fxScale', 'fx-v-scale']]) {
-    const sl = document.getElementById(id);
-    sl.addEventListener('input', () => {
-      params[key] = parseFloat(sl.value);
-      document.getElementById(vid).textContent = parseFloat(sl.value).toFixed(2);
+  // STUDIO: per-effect dial sets (Ladybug-style), rendered dynamically
+  const FX_DIALS = [
+    /* ascii    */ [['Cell', 0.55], ['Contrast', 0.5], ['Colorize', 0.65], ['Invert', 0]],
+    /* halftone */ [['Cell', 0.5], ['Angle', 0.1], ['Gain', 0.5], ['Mono', 0]],
+    /* duotone  */ [['Levels', 0.45], ['Hue A', 0.62], ['Hue B', 0.12], ['Contrast', 0.5]],
+    /* glitch   */ [['Blocks', 0.5], ['RGB split', 0.35], ['Scanlines', 0.5], ['Rate', 0.4]],
+    /* edges    */ [['Thickness', 0.35], ['Glow', 0.6], ['Hue', 0.55], ['BG mix', 0.06]],
+    /* riso     */ [['Cell', 0.55], ['Ink hue', 0.02], ['Misreg', 0.5], ['Paper', 0.5]],
+    /* contour  */ [['Levels', 0.5], ['Thickness', 0.35], ['Glow', 0.6], ['Flow', 0.5]],
+    /* matrix   */ [['Cell', 0.5], ['Gap', 0.4], ['Palette', 0.9], ['Glow', 0.5]],
+  ];
+  params.fxP = FX_DIALS[0].map(d => d[1]);
+  const fxDialsEl = document.getElementById('fx-dials');
+  function renderFxDials() {
+    const fx = params.fxEffect ?? 0;
+    params.fxP = FX_DIALS[fx].map(d => d[1]);
+    fxDialsEl.textContent = '';
+    FX_DIALS[fx].forEach(([label, def], i) => {
+      const row = document.createElement('div');
+      row.className = 'tune-row';
+      const lb = document.createElement('span');
+      lb.className = 'tune-label';
+      lb.textContent = label;
+      const sl = document.createElement('input');
+      sl.type = 'range'; sl.min = '0'; sl.max = '1'; sl.step = '0.02'; sl.value = def;
+      const vl = document.createElement('span');
+      vl.className = 'tune-val';
+      vl.textContent = def.toFixed(2);
+      sl.addEventListener('input', () => {
+        params.fxP[i] = parseFloat(sl.value);
+        vl.textContent = parseFloat(sl.value).toFixed(2);
+      });
+      row.append(lb, sl, vl);
+      fxDialsEl.append(row);
     });
   }
+  document.getElementById('fx-effect').addEventListener('change', e => {
+    params.fxEffect = parseInt(e.target.value, 10);
+    renderFxDials();
+  });
+  renderFxDials();
+  document.getElementById('fx-react').addEventListener('input', e => {
+    params.fxReact = parseFloat(e.target.value);
+    document.getElementById('fx-v-react').textContent = parseFloat(e.target.value).toFixed(2);
+  });
   const btnPrismEnv = document.getElementById('btn-prism-env');
   btnPrismEnv.addEventListener('click', () => {
     params.prismClassic = !params.prismClassic;
