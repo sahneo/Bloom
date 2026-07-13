@@ -19,8 +19,6 @@ import { CymaticsPreset }     from './presets/cymatics.js';
 import { StormPreset }        from './presets/storm.js';
 import { TerraPreset }        from './presets/terra.js';
 import { SwarmPreset }        from './presets/swarm.js';
-import { CityPreset }         from './presets/city.js';
-import { GalaxyPreset }       from './presets/galaxy.js';
 import { WledSync }           from './wled.js';
 import posthogLib from 'posthog-js';
 
@@ -752,8 +750,6 @@ async function init() {
     storm:        StormPreset,
     terra:        TerraPreset,
     swarm:        SwarmPreset,
-    city:         CityPreset,
-    galaxy:       GalaxyPreset,
   };
   const modeSelect = document.getElementById('mode-select');
 
