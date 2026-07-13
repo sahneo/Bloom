@@ -8,15 +8,17 @@ import { buildUniforms, UNIFORM_SIZE, RIPPLE_OFFSET } from './uniforms.js';
 
 // band → light binding: depth (0 far … 1 near), hue offset from the key,
 // drift speed, base size
+// Moodboard palette logic: large organic blobs, mostly analogous hues with
+// one complementary accent — foliage-behind-glass, not disco
 const LIGHTS = [
-  { band: 'kick',    depth: 0.88, hueOff: 0.00,  speed: 0.11, size: 0.45 },
-  { band: 'snare',   depth: 0.70, hueOff: 0.50,  speed: 0.16, size: 0.34 },
-  { band: 'bass',    depth: 0.22, hueOff: 0.06,  speed: 0.05, size: 0.85 },
-  { band: 'subBass', depth: 0.08, hueOff: -0.06, speed: 0.03, size: 1.15 },
-  { band: 'mid',     depth: 0.55, hueOff: 0.33,  speed: 0.20, size: 0.38 },
-  { band: 'mid',     depth: 0.45, hueOff: -0.33, speed: 0.24, size: 0.34 },
-  { band: 'high',    depth: 0.80, hueOff: 0.17,  speed: 0.30, size: 0.20 },
-  { band: 'high',    depth: 0.92, hueOff: -0.17, speed: 0.36, size: 0.16 },
+  { band: 'kick',    depth: 0.85, hueOff: 0.02,  speed: 0.07, size: 0.60 },
+  { band: 'snare',   depth: 0.65, hueOff: 0.50,  speed: 0.09, size: 0.45 },
+  { band: 'bass',    depth: 0.25, hueOff: 0.07,  speed: 0.035, size: 0.95 },
+  { band: 'subBass', depth: 0.10, hueOff: -0.05, speed: 0.022, size: 1.15 },
+  { band: 'mid',     depth: 0.55, hueOff: 0.12,  speed: 0.12, size: 0.55 },
+  { band: 'mid',     depth: 0.45, hueOff: -0.10, speed: 0.14, size: 0.50 },
+  { band: 'high',    depth: 0.75, hueOff: 0.18,  speed: 0.18, size: 0.32 },
+  { band: 'high',    depth: 0.90, hueOff: -0.15, speed: 0.21, size: 0.26 },
 ];
 
 export class GlassPreset {
@@ -92,8 +94,8 @@ export class GlassPreset {
       const x = Math.sin(w * 1.00 + s) * 0.62 * aspect + Math.sin(w * 0.37 + s * 2.1) * 0.25;
       const y = Math.cos(w * 0.83 + s * 1.7) * 0.58 + Math.sin(w * 0.29 + s * 0.6) * 0.22;
       const level = bands[L.band] ?? 0;
-      const bright = 0.10 + level * 0.85 + this._flash[i]
-                   + (L.band === 'bass' ? this._bassEma * 0.4 : 0);
+      const bright = 0.04 + level * 0.50 + this._flash[i] * 0.6
+                   + (L.band === 'bass' ? this._bassEma * 0.25 : 0);
       e[i * 4]     = x;
       e[i * 4 + 1] = y;
       e[i * 4 + 2] = L.depth;
