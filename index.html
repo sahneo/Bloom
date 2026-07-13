@@ -602,6 +602,57 @@
     }
     #btn-ascii-color:hover { opacity: 0.85; }
 
+    /* ── RESOLVER panel ──────────────────────────────────────────── */
+    #resolver-panel {
+      position: fixed;
+      top: 52px;
+      left: 20px;
+      background: rgba(8,8,14,0.88);
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 10px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      backdrop-filter: blur(14px);
+      pointer-events: all;
+      width: 240px;
+    }
+    #resolver-panel.hidden { display: none; }
+    .media-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 0.62rem;
+      letter-spacing: 0.03em;
+      opacity: 0.55;
+      cursor: pointer;
+      padding: 3px 5px;
+      border-radius: 4px;
+    }
+    .media-row:hover { opacity: 0.9; background: rgba(255,255,255,0.05); }
+    .media-row.playing {
+      opacity: 1;
+      background: rgba(120,200,255,0.10);
+      color: #88d8ff;
+    }
+    .media-row .m-kind { opacity: 0.5; font-size: 0.55rem; width: 24px; flex-shrink: 0; }
+    .media-row .m-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .media-row .m-del  {
+      padding: 1px 6px;
+      font-size: 0.6rem;
+      border-radius: 3px;
+      opacity: 0.4;
+      flex-shrink: 0;
+    }
+    .media-row .m-del:hover { opacity: 1; color: #ff9090; border-color: rgba(255,100,100,0.4); }
+    #media-list:empty::after {
+      content: 'no media — load with the MEDIA button';
+      font-size: 0.56rem;
+      opacity: 0.3;
+      letter-spacing: 0.05em;
+    }
+
     /* ── Cymatics sand colour swatch ─────────────────────────────── */
     #btn-sand-color {
       position: fixed;
@@ -1062,6 +1113,37 @@
     <button id="train-clear" disabled>CLEAR</button>
   </div>
   <div class="train-hint">or press Space to tap</div>
+</div>
+
+<div id="resolver-panel" class="hidden">
+  <div class="train-title">RESOLVER</div>
+  <div class="tune-row">
+    <span class="tune-label">Glitch</span>
+    <input type="range" id="rs-glitch" min="0" max="2" step="0.05" value="1">
+    <span class="tune-val" id="rs-v-glitch">1.00</span>
+  </div>
+  <div class="tune-row">
+    <span class="tune-label">Cell</span>
+    <input type="range" id="rs-cell" min="0.5" max="2.5" step="0.05" value="1">
+    <span class="tune-val" id="rs-v-cell">1.00</span>
+  </div>
+  <div class="tune-row">
+    <span class="tune-label">Speed</span>
+    <input type="range" id="rs-speed" min="0.1" max="1" step="0.05" value="1">
+    <span class="tune-val" id="rs-v-speed">1.00</span>
+  </div>
+  <div class="tune-row">
+    <span class="tune-label">Cut</span>
+    <select class="band-select" id="rs-cut" style="flex:1">
+      <option value="1">every bar</option>
+      <option value="2" selected>every 2 bars</option>
+      <option value="4">every 4 bars</option>
+      <option value="8">every 8 bars</option>
+      <option value="0">drops only</option>
+    </select>
+  </div>
+  <div class="tune-divider"></div>
+  <div id="media-list"></div>
 </div>
 
 <button id="btn-ripple-color" title="Ripple color"></button>

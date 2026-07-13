@@ -26,11 +26,11 @@ export async function addMediaFiles(files) {
       }).catch(() => null);
       if (v.videoWidth) {
         v.play().catch(() => {});
-        playlist.items.push({ kind: 'video', el: v, w: v.videoWidth, h: v.videoHeight });
+        playlist.items.push({ kind: 'video', el: v, url, name: file.name, w: v.videoWidth, h: v.videoHeight });
       }
     } else if (file.type.startsWith('image')) {
       const bmp = await createImageBitmap(file).catch(() => null);
-      if (bmp) playlist.items.push({ kind: 'image', el: bmp, w: bmp.width, h: bmp.height });
+      if (bmp) playlist.items.push({ kind: 'image', el: bmp, name: file.name, w: bmp.width, h: bmp.height });
     }
   }
   playlist.onchange?.();
@@ -38,6 +38,24 @@ export async function addMediaFiles(files) {
 }
 
 export function mediaCount() { return playlist.items.length; }
+
+// Playlist editing API for the RESOLVER panel
+export const mediaApi = {
+  list:  () => playlist.items.map(i => ({ name: i.name, kind: i.kind })),
+  index: () => playlist.index,
+  onchange: (fn) => { playlist.onchange = fn; },
+  select(i) {
+    if (playlist.items[i]) { playlist.index = i; playlist.onchange?.(); }
+  },
+  remove(i) {
+    const item = playlist.items[i];
+    if (!item) return;
+    if (item.kind === 'video') { item.el.pause(); URL.revokeObjectURL(item.url); }
+    playlist.items.splice(i, 1);
+    if (playlist.index >= playlist.items.length) playlist.index = 0;
+    playlist.onchange?.();
+  },
+};
 
 export class DitherPreset {
   constructor() {
@@ -117,6 +135,7 @@ export class DitherPreset {
   _cut() {
     if (playlist.items.length > 1) {
       playlist.index = (playlist.index + 1) % playlist.items.length;
+      playlist.onchange?.();
     }
     this._kbSeed = Math.random() * 10;
     this._itemAge = 0;
@@ -139,6 +158,10 @@ export class DitherPreset {
       }
       if (item.kind === 'video') item.el.play().catch(() => {});
     }
+    if (item.kind === 'video') {
+      const rate = this._params?.rsSpeed ?? 1;
+      if (Math.abs(item.el.playbackRate - rate) > 0.01) item.el.playbackRate = rate;
+    }
     if (item.kind === 'video' && item.el.readyState >= 2) {
       this.device.queue.copyExternalImageToTexture(
         { source: item.el }, { texture: this.mediaTex }, [item.w, item.h]);
@@ -151,18 +174,22 @@ export class DitherPreset {
     this._params = params;
     const dt = Math.min(deltaMs * 0.001, 0.05);
     const t  = timeMs * 0.001;
+    const speed  = params.rsSpeed  ?? 1;   // animation slow-down
+    const glitch = params.rsGlitch ?? 1;   // glitch intensity
     this._itemAge += dt;
+    this._anim = (this._anim ?? 0) + dt * speed;
 
     const hasMedia = this._updateMedia();
 
     // ── musical cutting: every 2 bars, or on a drop ──────────────────────
+    const cutBars = params.rsCutBars ?? 2;       // 0 = no auto-cutting
     const barPos = params.barPos ?? 0;
     if (barPos < this._prevBar - 1.0) {
       this._bars++;
-      if (this._bars % 2 === 0 && (params.beatConf ?? 0) > 0.15) this._cut();
+      if (cutBars > 0 && this._bars % cutBars === 0 && (params.beatConf ?? 0) > 0.15) this._cut();
     }
     this._prevBar = barPos;
-    if (this._itemAge > 9) this._cut();           // fallback without a beat grid
+    if (cutBars > 0 && this._itemAge > 9 + cutBars * 3) this._cut();   // no-beat fallback
 
     const drop = params.dropPulse ?? 0;
     if (drop > 0.5 && this._prevDrop <= 0.5) {
@@ -200,7 +227,7 @@ export class DitherPreset {
     // ── Ken Burns for stills; videos play as-is with a hair of zoom ──────
     const item = playlist.items[playlist.index];
     const still = item?.kind === 'image';
-    const kbT = this._itemAge * (still ? 0.05 : 0.012);
+    const kbT = (this._anim ?? 0) * (still ? 0.05 : 0.012);
     const kbZoom = 1.10 + Math.sin(kbT * 2.0 + this._kbSeed) * (still ? 0.09 : 0.02);
     const kbPanX = Math.sin(kbT * 1.3 + this._kbSeed * 2.0) * (still ? 0.06 : 0.012);
     const kbPanY = Math.cos(kbT * 1.7 + this._kbSeed) * (still ? 0.05 : 0.010);
@@ -209,16 +236,17 @@ export class DitherPreset {
     const u = buildUniforms(bands, timeMs, deltaMs, params, this.canvas, this.frameCount, 1);
     // cell size: base grows with kick and drops in quiet passages
     const energy = ((bands.bass ?? 0) + (bands.mid ?? 0)) * 0.5;
-    u[41] = (4.0 + energy * 3.0 + this._kickEnv * 5.0) * Math.min(devicePixelRatio, 1.5);
+    u[41] = (4.0 + energy * 3.0 + this._kickEnv * 5.0 * glitch)
+          * (params.rsCell ?? 1) * Math.min(devicePixelRatio, 1.5);
     u[42] = this._bars % 6 < 2 ? 0 : this._bars % 6 < 4 ? 1 : 2;   // pattern rotates by phrase
     u[43] = hasMedia ? 1 : 0;
     device.queue.writeBuffer(this.uniformBuffer, 0, u);
 
     const e = this._extra;
-    e[0] = this._kickEnv;
-    e[1] = this._mirrorEnv;
-    e[2] = this._invert + drop * 0.3;
-    e[3] = 1.15 + (params.tension ?? 0) * 1.1;    // contrast
+    e[0] = this._kickEnv * glitch;
+    e[1] = this._mirrorEnv * glitch;
+    e[2] = (this._invert + drop * 0.3) * Math.min(glitch, 1.2);
+    e[3] = 1.15 + (params.tension ?? 0) * 1.1 * glitch;    // contrast
     e[4] = kbZoom; e[5] = kbPanX; e[6] = kbPanY;
     e[7] = item ? item.w / item.h : 1.77;
     e[8] = this._specShow;

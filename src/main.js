@@ -21,7 +21,7 @@ import { TerraPreset }        from './presets/terra.js';
 import { SwarmPreset }        from './presets/swarm.js';
 import { GalaxyPreset }       from './presets/galaxy.js';
 import { GlassPreset }        from './presets/glass.js';
-import { DitherPreset, addMediaFiles, mediaCount } from './presets/dither.js';
+import { DitherPreset, addMediaFiles, mediaApi } from './presets/dither.js';
 import { WledSync }           from './wled.js';
 import posthogLib from 'posthog-js';
 
@@ -765,6 +765,7 @@ async function init() {
     document.getElementById('btn-sand-color').style.display  = mode === 'cymatics' ? '' : 'none';
     document.getElementById('btn-ascii-color').style.display = mode === 'ascii'    ? '' : 'none';
     document.getElementById('btn-media').style.display       = mode === 'dither'   ? '' : 'none';
+    document.getElementById('resolver-panel').classList.toggle('hidden', mode !== 'dither');
   }
   updateModeControls('particles');
 
@@ -800,7 +801,7 @@ async function init() {
   }
 
   let lastManualModeMs = 0;
-  // RESOLVER media loading
+  // RESOLVER media loading + panel
   const btnMedia   = document.getElementById('btn-media');
   const mediaInput = document.getElementById('media-input');
   btnMedia.addEventListener('click', () => mediaInput.click());
@@ -811,6 +812,47 @@ async function init() {
     btnMedia.textContent = `MEDIA ${n}`;
     btnMedia.classList.add('active');
     posthog.capture('media_loaded', { count: n });
+  });
+
+  // playlist editor: click = play now, ✕ = remove
+  const mediaListEl = document.getElementById('media-list');
+  function renderMediaList() {
+    const items = mediaApi.list();
+    const cur = mediaApi.index();
+    mediaListEl.textContent = '';
+    items.forEach((it, i) => {
+      const row = document.createElement('div');
+      row.className = 'media-row' + (i === cur ? ' playing' : '');
+      const kind = document.createElement('span');
+      kind.className = 'm-kind';
+      kind.textContent = it.kind === 'video' ? 'VID' : 'IMG';
+      const name = document.createElement('span');
+      name.className = 'm-name';
+      name.textContent = it.name ?? `item ${i + 1}`;
+      const del = document.createElement('button');
+      del.className = 'm-del';
+      del.textContent = '\u2715';
+      del.addEventListener('click', (e) => { e.stopPropagation(); mediaApi.remove(i); });
+      row.addEventListener('click', () => mediaApi.select(i));
+      row.append(kind, name, del);
+      mediaListEl.append(row);
+    });
+    btnMedia.textContent = items.length ? `MEDIA ${items.length}` : 'MEDIA';
+  }
+  mediaApi.onchange(renderMediaList);
+
+  // RESOLVER sliders → params
+  for (const [id, key, vid] of [['rs-glitch', 'rsGlitch', 'rs-v-glitch'],
+                                 ['rs-cell', 'rsCell', 'rs-v-cell'],
+                                 ['rs-speed', 'rsSpeed', 'rs-v-speed']]) {
+    const sl = document.getElementById(id);
+    sl.addEventListener('input', () => {
+      params[key] = parseFloat(sl.value);
+      document.getElementById(vid).textContent = parseFloat(sl.value).toFixed(2);
+    });
+  }
+  document.getElementById('rs-cut').addEventListener('change', e => {
+    params.rsCutBars = parseInt(e.target.value, 10);
   });
 
   modeSelect.addEventListener('change', () => {
