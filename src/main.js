@@ -772,7 +772,6 @@ async function init() {
     document.getElementById('btn-pal').style.display         = mode === 'void'     ? '' : 'none';
     document.getElementById('btn-sand-color').style.display  = mode === 'cymatics' ? '' : 'none';
     document.getElementById('btn-ascii-color').style.display = mode === 'ascii'    ? '' : 'none';
-    document.getElementById('btn-media').style.display       = (mode === 'dither' || mode === 'glass' || mode === 'fx') ? '' : 'none';
     document.getElementById('resolver-panel').classList.toggle('hidden', mode !== 'dither');
     document.getElementById('glass-panel').classList.toggle('hidden', mode !== 'glass');
     document.getElementById('btn-prism-env').style.display = mode === 'prism' ? '' : 'none';
@@ -813,43 +812,45 @@ async function init() {
   }
 
   let lastManualModeMs = 0;
-  // RESOLVER media loading + panel
-  const btnMedia   = document.getElementById('btn-media');
+  // Shared media playlist — each media-capable panel (RESOLVER / STUDIO /
+  // GLASS) has its own + MEDIA button and playlist editor, all backed by
+  // the same list. Click a row = play now, ✕ = remove.
   const mediaInput = document.getElementById('media-input');
-  btnMedia.addEventListener('click', () => mediaInput.click());
+  const addMediaBtns = [...document.querySelectorAll('.btn-add-media')];
+  for (const btn of addMediaBtns) btn.addEventListener('click', () => mediaInput.click());
   mediaInput.addEventListener('change', async () => {
     if (!mediaInput.files?.length) return;
-    btnMedia.textContent = '...';
     const n = await addMediaFiles(mediaInput.files);
-    btnMedia.textContent = `MEDIA ${n}`;
-    btnMedia.classList.add('active');
+    mediaInput.value = '';
     posthog.capture('media_loaded', { count: n });
   });
 
-  // playlist editor: click = play now, ✕ = remove
-  const mediaListEl = document.getElementById('media-list');
+  const mediaListEls = [...document.querySelectorAll('.media-list')];
   function renderMediaList() {
     const items = mediaApi.list();
     const cur = mediaApi.index();
-    mediaListEl.textContent = '';
-    items.forEach((it, i) => {
-      const row = document.createElement('div');
-      row.className = 'media-row' + (i === cur ? ' playing' : '');
-      const kind = document.createElement('span');
-      kind.className = 'm-kind';
-      kind.textContent = it.kind === 'video' ? 'VID' : 'IMG';
-      const name = document.createElement('span');
-      name.className = 'm-name';
-      name.textContent = it.name ?? `item ${i + 1}`;
-      const del = document.createElement('button');
-      del.className = 'm-del';
-      del.textContent = '\u2715';
-      del.addEventListener('click', (e) => { e.stopPropagation(); mediaApi.remove(i); });
-      row.addEventListener('click', () => mediaApi.select(i));
-      row.append(kind, name, del);
-      mediaListEl.append(row);
-    });
-    btnMedia.textContent = items.length ? `MEDIA ${items.length}` : 'MEDIA';
+    for (const listEl of mediaListEls) {
+      listEl.textContent = '';
+      items.forEach((it, i) => {
+        const row = document.createElement('div');
+        row.className = 'media-row' + (i === cur ? ' playing' : '');
+        const kind = document.createElement('span');
+        kind.className = 'm-kind';
+        kind.textContent = it.kind === 'video' ? 'VID' : 'IMG';
+        const name = document.createElement('span');
+        name.className = 'm-name';
+        name.textContent = it.name ?? `item ${i + 1}`;
+        const del = document.createElement('button');
+        del.className = 'm-del';
+        del.textContent = '\u2715';
+        del.addEventListener('click', (e) => { e.stopPropagation(); mediaApi.remove(i); });
+        row.addEventListener('click', () => mediaApi.select(i));
+        row.append(kind, name, del);
+        listEl.append(row);
+      });
+    }
+    for (const btn of addMediaBtns)
+      btn.textContent = items.length ? `+ MEDIA (${items.length})` : '+ MEDIA';
   }
   mediaApi.onchange(renderMediaList);
 

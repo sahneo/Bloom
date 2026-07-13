@@ -703,12 +703,34 @@
       flex-shrink: 0;
     }
     .media-row .m-del:hover { opacity: 1; color: #ff9090; border-color: rgba(255,100,100,0.4); }
-    #media-list:empty::after {
-      content: 'no media — load with the MEDIA button';
+    .media-list:empty::after {
+      content: 'no media yet — hit + MEDIA';
       font-size: 0.56rem;
       opacity: 0.3;
       letter-spacing: 0.05em;
     }
+    .media-list {
+      max-height: 180px;
+      overflow-y: auto;
+    }
+    .media-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .media-head .tune-label { width: auto; }
+    .btn-add-media {
+      font-size: 0.6rem;
+      letter-spacing: 0.08em;
+      padding: 3px 9px;
+      border: 1px solid rgba(255,255,255,0.22);
+      border-radius: 5px;
+      background: rgba(255,255,255,0.06);
+      color: #ccc;
+      cursor: pointer;
+    }
+    .btn-add-media:hover { background: rgba(255,255,255,0.14); color: #fff; }
 
     /* ── Cymatics sand colour swatch ─────────────────────────────── */
     #btn-sand-color {
@@ -1013,7 +1035,6 @@
     <option value="type">TYPE</option>
   </select>
   <button id="btn-pal" title="VOID palette: key / ember / glacier / synth / bone">PAL</button>
-  <button id="btn-media" title="RESOLVER: load your images/videos for the dither VJ">MEDIA</button>
   <button id="btn-prism-env" title="PRISM environment: rich studio or classic void">STUDIO</button>
   <input type="file" id="media-input" accept="image/*,video/*" multiple style="display:none">
   <button id="btn-bpm">BPM</button>
@@ -1225,6 +1246,12 @@
     <button id="gl-preset-gloss">GLOSS</button>
     <button id="gl-preset-matte">MATTE</button>
   </div>
+  <div class="tune-divider"></div>
+  <div class="media-head">
+    <span class="tune-label">Media (Source: media)</span>
+    <button class="btn-add-media" title="Load images/videos to show behind the glass">+ MEDIA</button>
+  </div>
+  <div class="media-list"></div>
 </div>
 
 <div id="type-panel" class="hidden">
@@ -1285,6 +1312,12 @@
   </div>
   <div class="tune-divider"></div>
   <div id="fx-dials"></div>
+  <div class="tune-divider"></div>
+  <div class="media-head">
+    <span class="tune-label">Playlist</span>
+    <button class="btn-add-media" title="Load your images/videos">+ MEDIA</button>
+  </div>
+  <div class="media-list"></div>
 </div>
 
 <div id="resolver-panel" class="hidden">
@@ -1315,7 +1348,11 @@
     </select>
   </div>
   <div class="tune-divider"></div>
-  <div id="media-list"></div>
+  <div class="media-head">
+    <span class="tune-label">Playlist</span>
+    <button class="btn-add-media" title="Load your images/videos">+ MEDIA</button>
+  </div>
+  <div class="media-list"></div>
 </div>
 
 <button id="btn-ripple-color" title="Ripple color"></button>
