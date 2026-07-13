@@ -41,7 +41,7 @@ struct VSOut {
 }
 
 const TILT: f32 = 1.12;   // mostly face-on — spiral arms must read
-const CAMD: f32 = 3.1;
+const CAMD: f32 = 2.15;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> VSOut {
@@ -61,7 +61,7 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VSOut {
   var p = vec3f(pos2.x, s.a.z, pos2.y);
 
   // slow azimuth drift + micro roll
-  let az = u.time * 0.03 + u.drift_rot * 0.25;
+  let az = u.time * 0.08 + u.drift_rot * 0.25;
   let ca = cos(az); let sa = sin(az);
   p = vec3f(p.x * ca + p.z * sa, p.y, -p.x * sa + p.z * ca);
   // tilt around x
@@ -81,8 +81,15 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VSOut {
   if (pop > 0.5 && pop < 1.5) {
     bright *= 1.0 + u.kick * 1.6 + exp(-fract(u.beat_t) * 6.0) * u.beat_conf * 0.5;
   }
-  // snare shimmer sweeps the arms by phase
+  // Spiral arms as a DENSITY WAVE: stars stream through a rigidly rotating
+  // two-armed brightness pattern — the arms never wind away, exactly like
+  // a real galaxy. Busy music sharpens the contrast.
+  var armF = 0.0;
   if (pop < 0.5) {
+    let phase = th - log(max(r, 0.06) / 0.14) * 2.4 - u.time * 0.05;
+    armF = pow(0.5 + 0.5 * cos(2.0 * phase), 3.0);
+    bright *= 0.28 + (1.9 + u.mid * u.mul_mid * 1.3) * armF;
+    // snare shimmer sweeps around the disk
     bright *= 1.0 + u.snare * 0.8 * pow(max(sin(s.b.z + u.time * 2.0), 0.0), 6.0);
   }
   // supernova: blinding flash near the blast + expanding shell
@@ -104,11 +111,14 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VSOut {
   } else {                  // arms: young stars in key-tinted gas
     let gas  = hsv2rgb(vec3f(u.key_hue, 0.55 * u.key_conf + 0.15, 1.0));
     let star = mix(vec3f(0.62, 0.74, 1.05), vec3f(1.02, 0.88, 0.66), warm);
-    col = mix(star, gas, 0.35);
+    // arm crests glow blue-white with gas; inter-arm dust is dim and warm
+    col = mix(mix(star, gas, 0.35) * 0.72 + vec3f(0.08, 0.05, 0.03),
+              mix(star, gas, 0.45) * 1.18 + vec3f(0.04, 0.07, 0.14),
+              armF);
   }
 
-  let clip = vec2f((p.x / depth * 2.4 + c.x * size) / aspect,
-                    p.y / depth * 2.4 + c.y * size);
+  let clip = vec2f((p.x / depth * 2.9 + c.x * size) / aspect,
+                    p.y / depth * 2.9 + c.y * size);
   return VSOut(vec4f(clip, 0.0, 1.0), c, col, bright);
 }
 
@@ -117,6 +127,6 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   let d = length(in.local);
   if (d > 1.0) { discard; }
   let edge = smoothstep(1.0, 0.15, d);
-  let a = edge * in.alpha * u.trail_gain * 0.085;
+  let a = edge * in.alpha * u.trail_gain * 0.11;
   return vec4f(in.col * a, a);   // premultiplied, one/one blend
 }

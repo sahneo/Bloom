@@ -148,21 +148,10 @@ fn terrainH(xz: vec2f) -> f32 {
     let dv = xz - vp;
     h += env * 3.4 * exp(-dot(dv, dv) * 0.05);
   }
-  return h;
-}
-
-// Broad-mass-only height (no ridges/spikes/rock noise) — the camera path
-// rides this so the flight glides instead of jittering over detail
-fn terrainLow(xz: vec2f) -> f32 {
-  let r = sampleRows(xz.y);
-  let s = u.scene_seed * 3.7;
-  let mass = fbm2(vec2f(xz.x * 0.16, xz.y * 0.11) + vec2f(s, s * 1.3));
-  let side = 0.55 + 0.45 * smoothstep(1.2, 8.0, abs(xz.x));
-  // conservative UPPER BOUND: broad mass + max possible ridge/kick/rock
-  // detail. The camera glides over this, so it never needs a full-detail
-  // probe (a single such probe was the vertical jerk).
-  return r.x * (0.35 + 1.55 * mass * mass) * 2.7 * side
-       + r.y * 1.5 + r.z * 0.9 + 0.37;
+  // Soft compressor: heights asymptote below the (fixed) flight altitude,
+  // so the camera flies LEVEL like an aircraft and can never be clipped —
+  // no terrain-following at all.
+  return 4.6 * (1.0 - exp(-h * 0.30));
 }
 
 // ── sky ──────────────────────────────────────────────────────────────────
@@ -216,11 +205,9 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
   let head = u._r1;
   let camZ = (head - HORIZON_ROWS) * ROW_SPACING;
   let wx   = sin(camZ * 0.055 + u.scene_seed) * 1.1 + u.drift_x * 1.2;
-  var gsum = 0.0;
-  for (var k = 0; k <= 5; k++) {
-    gsum += terrainLow(vec2f(wx, camZ + f32(k) * 1.7));
-  }
-  let camY = gsum / 6.0 + 1.35 + sin(u.time * 0.31) * 0.10;
+  // LEVEL flight: fixed cruise altitude above the compressed-height
+  // asymptote (4.6) — terrain rises toward the camera but never reaches it
+  let camY = 5.4 + sin(u.time * 0.23) * 0.12;
   var ro = vec3f(wx, camY, camZ);
   // eruption shockwave shakes the airframe
   let shake = u.extra[0].z;
@@ -228,7 +215,7 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
 
   // forward look, slight down pitch, bank into the weave
   let weaveD = cos(camZ * 0.055 + u.scene_seed) * 0.11;
-  let fwd = normalize(vec3f(weaveD * 0.9, -0.10, 1.0));
+  let fwd = normalize(vec3f(weaveD * 0.9, -0.16, 1.0));
   var rt  = normalize(cross(vec3f(0.0, 1.0, 0.0), fwd));
   var upv = cross(fwd, rt);
   let bank = rot2(-weaveD * 1.1 + u.drift_rot * 0.15);

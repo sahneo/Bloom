@@ -52,14 +52,12 @@ export class GalaxyPreset {
         r  = 0.4 + Math.random() * 1.1;
         th = Math.random() * TWO_PI;
         z  = gauss() * 0.35;
-      } else {                              // arms
-        pop = 0;
-        r  = 0.18 + (-Math.log(Math.max(Math.random(), 1e-4))) * 0.34;
-        if (r > 1.5) r = 0.18 + Math.random() * 1.1;   // resample — a hard clamp drew a rim ring
-        const arm = (Math.random() < 0.5) ? 0 : Math.PI;
-        // log spiral: θ grows with ln r; gaussian spread widens outward
-        th = arm + Math.log(r / 0.14) * 2.4 + gauss() * (0.22 + r * 0.26);
-        z  = gauss() * 0.030 * (0.4 + r);
+      } else {                              // disk — arms are a density
+        pop = 0;                              // WAVE in the shader, so stars
+        r  = 0.18 + (-Math.log(Math.max(Math.random(), 1e-4))) * 0.36;   // fill the disk uniformly
+        if (r > 1.5) r = 0.18 + Math.random() * 1.15;
+        th = Math.random() * TWO_PI;
+        z  = gauss() * 0.055 * (0.4 + r);
       }
       const o = i * 8;
       data[o]     = r;

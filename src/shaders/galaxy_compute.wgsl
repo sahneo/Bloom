@@ -50,7 +50,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
   }
 
   // differential rotation, sped up by the track's energy
-  th += dt * (0.10 + u._r1 * 0.85) / (0.35 + r);
+  th += dt * (0.30 + u._r1 * 2.2) / (0.35 + r);
 
   // spring back to the home radius (heals the nova wound over ~8 s)
   r += (s.b.x - r) * (1.0 - exp(-dt * 0.30));
