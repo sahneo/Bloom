@@ -23,6 +23,7 @@ import { GalaxyPreset }       from './presets/galaxy.js';
 import { GlassPreset }        from './presets/glass.js';
 import { DitherPreset, addMediaFiles, mediaApi } from './presets/dither.js';
 import { AcidPreset }         from './presets/acid.js';
+import { PrismPreset }        from './presets/prism.js';
 import { WledSync }           from './wled.js';
 import posthogLib from 'posthog-js';
 
@@ -758,6 +759,7 @@ async function init() {
     glass:        GlassPreset,
     dither:       DitherPreset,
     acid:         AcidPreset,
+    prism:        PrismPreset,
   };
   const modeSelect = document.getElementById('mode-select');
 
@@ -900,7 +902,7 @@ async function init() {
   // (drops sometimes, every 16 phrases otherwise). Backs off for 45 s after
   // a manual pick so the user always wins.
   // city/galaxy join the pool once their presets land (stubs render black)
-  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid'];
+  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism'];
   let _phrasesSincePreset = 0;
 
   function rotatePreset(style) {
