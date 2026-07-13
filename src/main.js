@@ -21,6 +21,7 @@ import { TerraPreset }        from './presets/terra.js';
 import { SwarmPreset }        from './presets/swarm.js';
 import { GalaxyPreset }       from './presets/galaxy.js';
 import { GlassPreset }        from './presets/glass.js';
+import { DitherPreset, addMediaFiles, mediaCount } from './presets/dither.js';
 import { WledSync }           from './wled.js';
 import posthogLib from 'posthog-js';
 
@@ -754,6 +755,7 @@ async function init() {
     swarm:        SwarmPreset,
     galaxy:       GalaxyPreset,
     glass:        GlassPreset,
+    dither:       DitherPreset,
   };
   const modeSelect = document.getElementById('mode-select');
 
@@ -762,6 +764,7 @@ async function init() {
     document.getElementById('btn-pal').style.display         = mode === 'void'     ? '' : 'none';
     document.getElementById('btn-sand-color').style.display  = mode === 'cymatics' ? '' : 'none';
     document.getElementById('btn-ascii-color').style.display = mode === 'ascii'    ? '' : 'none';
+    document.getElementById('btn-media').style.display       = mode === 'dither'   ? '' : 'none';
   }
   updateModeControls('particles');
 
@@ -797,6 +800,19 @@ async function init() {
   }
 
   let lastManualModeMs = 0;
+  // RESOLVER media loading
+  const btnMedia   = document.getElementById('btn-media');
+  const mediaInput = document.getElementById('media-input');
+  btnMedia.addEventListener('click', () => mediaInput.click());
+  mediaInput.addEventListener('change', async () => {
+    if (!mediaInput.files?.length) return;
+    btnMedia.textContent = '...';
+    const n = await addMediaFiles(mediaInput.files);
+    btnMedia.textContent = `MEDIA ${n}`;
+    btnMedia.classList.add('active');
+    posthog.capture('media_loaded', { count: n });
+  });
+
   modeSelect.addEventListener('change', () => {
     lastManualModeMs = performance.now();
     switchModeCinematic(modeSelect.value, 'fade');
