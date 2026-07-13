@@ -24,6 +24,7 @@ import { GlassPreset }        from './presets/glass.js';
 import { DitherPreset, addMediaFiles, mediaApi } from './presets/dither.js';
 import { AcidPreset }         from './presets/acid.js';
 import { PrismPreset }        from './presets/prism.js';
+import { FxPreset }           from './presets/fx.js';
 import { WledSync }           from './wled.js';
 import posthogLib from 'posthog-js';
 
@@ -760,6 +761,7 @@ async function init() {
     dither:       DitherPreset,
     acid:         AcidPreset,
     prism:        PrismPreset,
+    fx:           FxPreset,
   };
   const modeSelect = document.getElementById('mode-select');
 
@@ -768,10 +770,11 @@ async function init() {
     document.getElementById('btn-pal').style.display         = mode === 'void'     ? '' : 'none';
     document.getElementById('btn-sand-color').style.display  = mode === 'cymatics' ? '' : 'none';
     document.getElementById('btn-ascii-color').style.display = mode === 'ascii'    ? '' : 'none';
-    document.getElementById('btn-media').style.display       = (mode === 'dither' || mode === 'glass') ? '' : 'none';
+    document.getElementById('btn-media').style.display       = (mode === 'dither' || mode === 'glass' || mode === 'fx') ? '' : 'none';
     document.getElementById('resolver-panel').classList.toggle('hidden', mode !== 'dither');
     document.getElementById('glass-panel').classList.toggle('hidden', mode !== 'glass');
     document.getElementById('btn-prism-env').style.display = mode === 'prism' ? '' : 'none';
+    document.getElementById('fx-panel').classList.toggle('hidden', mode !== 'fx');
   }
   updateModeControls('particles');
 
@@ -876,6 +879,14 @@ async function init() {
   }
   document.getElementById('gl-spec').addEventListener('change', e => { params.glSpec = e.target.checked; });
   document.getElementById('gl-shape').addEventListener('change', e => { params.glShape = parseInt(e.target.value, 10); });
+  document.getElementById('fx-effect').addEventListener('change', e => { params.fxEffect = parseInt(e.target.value, 10); });
+  for (const [id, key, vid] of [['fx-amount', 'fxAmount', 'fx-v-amount'], ['fx-scale', 'fxScale', 'fx-v-scale']]) {
+    const sl = document.getElementById(id);
+    sl.addEventListener('input', () => {
+      params[key] = parseFloat(sl.value);
+      document.getElementById(vid).textContent = parseFloat(sl.value).toFixed(2);
+    });
+  }
   const btnPrismEnv = document.getElementById('btn-prism-env');
   btnPrismEnv.addEventListener('click', () => {
     params.prismClassic = !params.prismClassic;
@@ -908,7 +919,7 @@ async function init() {
   // (drops sometimes, every 16 phrases otherwise). Backs off for 45 s after
   // a manual pick so the user always wins.
   // city/galaxy join the pool once their presets land (stubs render black)
-  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism'];
+  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism'];   // fx needs media — manual only
   let _phrasesSincePreset = 0;
 
   function rotatePreset(style) {

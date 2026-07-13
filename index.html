@@ -603,6 +603,22 @@
     #btn-ascii-color:hover { opacity: 0.85; }
 
     /* ── RESOLVER / GLASS panels ─────────────────────────────────── */
+    #fx-panel {
+      position: fixed;
+      top: 52px;
+      left: 20px;
+      background: rgba(8,8,14,0.88);
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 10px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      backdrop-filter: blur(14px);
+      pointer-events: all;
+      width: 240px;
+    }
+    #fx-panel.hidden { display: none; }
     #glass-panel {
       position: fixed;
       top: 52px;
@@ -977,6 +993,7 @@
     <option value="dither">RESOLVER</option>
     <option value="acid">ACID</option>
     <option value="prism">PRISM</option>
+    <option value="fx">STUDIO</option>
   </select>
   <button id="btn-pal" title="VOID palette: key / ember / glacier / synth / bone">PAL</button>
   <button id="btn-media" title="RESOLVER: load your images/videos for the dither VJ">MEDIA</button>
@@ -1190,6 +1207,30 @@
   <div class="tune-actions">
     <button id="gl-preset-gloss">GLOSS</button>
     <button id="gl-preset-matte">MATTE</button>
+  </div>
+</div>
+
+<div id="fx-panel" class="hidden">
+  <div class="train-title">STUDIO</div>
+  <div class="tune-row">
+    <span class="tune-label">Effect</span>
+    <select class="band-select" id="fx-effect" style="flex:1">
+      <option value="0" selected>ascii</option>
+      <option value="1">halftone</option>
+      <option value="2">duotone</option>
+      <option value="3">glitch</option>
+      <option value="4">edges</option>
+    </select>
+  </div>
+  <div class="tune-row">
+    <span class="tune-label">Amount</span>
+    <input type="range" id="fx-amount" min="0" max="1" step="0.05" value="1">
+    <span class="tune-val" id="fx-v-amount">1.00</span>
+  </div>
+  <div class="tune-row">
+    <span class="tune-label">Scale</span>
+    <input type="range" id="fx-scale" min="0" max="1" step="0.05" value="0.5">
+    <span class="tune-val" id="fx-v-scale">0.50</span>
   </div>
 </div>
 
