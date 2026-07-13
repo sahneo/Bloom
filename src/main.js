@@ -25,6 +25,7 @@ import { DitherPreset, addMediaFiles, mediaApi } from './presets/dither.js';
 import { AcidPreset }         from './presets/acid.js';
 import { PrismPreset }        from './presets/prism.js';
 import { FxPreset }           from './presets/fx.js';
+import { TypePreset }         from './presets/type.js';
 import { WledSync }           from './wled.js';
 import posthogLib from 'posthog-js';
 
@@ -762,6 +763,7 @@ async function init() {
     acid:         AcidPreset,
     prism:        PrismPreset,
     fx:           FxPreset,
+    type:         TypePreset,
   };
   const modeSelect = document.getElementById('mode-select');
 
@@ -775,6 +777,7 @@ async function init() {
     document.getElementById('glass-panel').classList.toggle('hidden', mode !== 'glass');
     document.getElementById('btn-prism-env').style.display = mode === 'prism' ? '' : 'none';
     document.getElementById('fx-panel').classList.toggle('hidden', mode !== 'fx');
+    document.getElementById('type-panel').classList.toggle('hidden', mode !== 'type');
   }
   updateModeControls('particles');
 
@@ -924,6 +927,31 @@ async function init() {
     params.fxReact = parseFloat(e.target.value);
     document.getElementById('fx-v-react').textContent = parseFloat(e.target.value).toFixed(2);
   });
+  // TYPE panel
+  document.getElementById('ty-text').addEventListener('input', e => { params.tyText = e.target.value; });
+  document.getElementById('ty-mode').addEventListener('change', e => { params.tyMode = parseInt(e.target.value, 10); });
+  for (const k of ['size', 'interval', 'amp', 'freq', 'speed']) {
+    const sl = document.getElementById('ty-' + k);
+    sl.addEventListener('input', () => {
+      params['ty' + k[0].toUpperCase() + k.slice(1)] = parseFloat(sl.value);
+      document.getElementById('ty-v-' + k).textContent = parseFloat(sl.value).toFixed(2);
+    });
+  }
+  {
+    const btn = document.getElementById('ty-color-btn');
+    const inp = document.getElementById('ty-color');
+    let picked = false;
+    btn.addEventListener('click', () => {
+      if (picked) { picked = false; params.tyColor = null; btn.style.background = 'rgba(255,255,255,0.25)'; }
+      else inp.click();
+    });
+    inp.addEventListener('input', e => {
+      picked = true;
+      const hex = e.target.value;
+      params.tyColor = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255);
+      btn.style.background = hex;
+    });
+  }
   const btnPrismEnv = document.getElementById('btn-prism-env');
   btnPrismEnv.addEventListener('click', () => {
     params.prismClassic = !params.prismClassic;
@@ -956,7 +984,7 @@ async function init() {
   // (drops sometimes, every 16 phrases otherwise). Backs off for 45 s after
   // a manual pick so the user always wins.
   // city/galaxy join the pool once their presets land (stubs render black)
-  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism'];   // fx needs media — manual only
+  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism', 'type'];   // fx needs media — manual only
   let _phrasesSincePreset = 0;
 
   function rotatePreset(style) {

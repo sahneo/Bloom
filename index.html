@@ -603,6 +603,22 @@
     #btn-ascii-color:hover { opacity: 0.85; }
 
     /* ── RESOLVER / GLASS panels ─────────────────────────────────── */
+    #type-panel {
+      position: fixed;
+      top: 52px;
+      left: 20px;
+      background: rgba(8,8,14,0.88);
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 10px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      backdrop-filter: blur(14px);
+      pointer-events: all;
+      width: 240px;
+    }
+    #type-panel.hidden { display: none; }
     #fx-panel {
       position: fixed;
       top: 52px;
@@ -994,6 +1010,7 @@
     <option value="acid">ACID</option>
     <option value="prism">PRISM</option>
     <option value="fx">STUDIO</option>
+    <option value="type">TYPE</option>
   </select>
   <button id="btn-pal" title="VOID palette: key / ember / glacier / synth / bone">PAL</button>
   <button id="btn-media" title="RESOLVER: load your images/videos for the dither VJ">MEDIA</button>
@@ -1208,6 +1225,42 @@
     <button id="gl-preset-gloss">GLOSS</button>
     <button id="gl-preset-matte">MATTE</button>
   </div>
+</div>
+
+<div id="type-panel" class="hidden">
+  <div class="train-title">TYPE</div>
+  <div class="tune-row">
+    <input type="text" id="ty-text" value="BLOOM" spellcheck="false" maxlength="40"
+           style="flex:1;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.15);
+                  border-radius:4px;color:#ddd;padding:5px 8px;font-size:0.7rem;
+                  font-family:'SF Mono',Menlo,monospace;outline:none">
+  </div>
+  <div class="tune-row">
+    <span class="tune-label">Mode</span>
+    <select class="band-select" id="ty-mode" style="flex:1">
+      <option value="0" selected>wavy rows</option>
+      <option value="1">word columns</option>
+      <option value="2">spiral</option>
+    </select>
+    <button id="ty-color-btn" style="width:26px;height:26px;padding:0;border-radius:5px;
+            background:rgba(255,255,255,0.25)" title="Text colour (click again = follow key)"></button>
+    <input type="color" id="ty-color" value="#F2EAD8" style="display:none">
+  </div>
+  <div class="tune-row"><span class="tune-label">Size</span>
+    <input type="range" id="ty-size" min="0" max="1" step="0.02" value="0.5">
+    <span class="tune-val" id="ty-v-size">0.50</span></div>
+  <div class="tune-row"><span class="tune-label">Interval</span>
+    <input type="range" id="ty-interval" min="0" max="1" step="0.02" value="0.3">
+    <span class="tune-val" id="ty-v-interval">0.30</span></div>
+  <div class="tune-row"><span class="tune-label">Amp</span>
+    <input type="range" id="ty-amp" min="0" max="1" step="0.02" value="0.5">
+    <span class="tune-val" id="ty-v-amp">0.50</span></div>
+  <div class="tune-row"><span class="tune-label">Freq</span>
+    <input type="range" id="ty-freq" min="0" max="1" step="0.02" value="0.5">
+    <span class="tune-val" id="ty-v-freq">0.50</span></div>
+  <div class="tune-row"><span class="tune-label">Speed</span>
+    <input type="range" id="ty-speed" min="0" max="1" step="0.02" value="0.5">
+    <span class="tune-val" id="ty-v-speed">0.50</span></div>
 </div>
 
 <div id="fx-panel" class="hidden">
