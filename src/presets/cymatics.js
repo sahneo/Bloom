@@ -48,7 +48,7 @@ export class CymaticsPreset {
     this._eMid  = 0.3;
     this._eHigh = 0.2;
 
-    this._extra = new Float32Array(8);   // [0]=(nA,mA,nB,mB) [1]=(strikeAge,...)
+    this._extra = new Float32Array(12);  // [0]=(nA,mA,nB,mB) [1]=(strikeAge,...) [2]=sand RGB
   }
 
   async init(device, format, canvas) {
@@ -227,6 +227,10 @@ export class CymaticsPreset {
     this._extra[2] = this._patB[0];
     this._extra[3] = this._patB[1];
     this._extra[4] = this._strikeAge;
+    const sand = params.sandColor ?? [1.0, 0.84, 0.52];
+    this._extra[8]  = sand[0];
+    this._extra[9]  = sand[1];
+    this._extra[10] = sand[2];
     device.queue.writeBuffer(this.uniformBuffer, RIPPLE_OFFSET, this._extra);
 
     const enc  = device.createCommandEncoder();

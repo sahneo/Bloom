@@ -56,6 +56,7 @@ export class VoidPreset {
     // Written into the trail_gain slot — the shader emits it as alpha.
     const alpha = 1 - 0.72 * PostFX.effTrail(params);
     const u = buildUniforms(bands, timeMs, deltaMs, params, this.canvas, this.frameCount, alpha);
+    u[41] = params.voidPalette ?? 0;   // _r1: palette bank selector
     device.queue.writeBuffer(this.uniformBuffer, 0, u);
     if (params.rippleData) {
       device.queue.writeBuffer(this.uniformBuffer, RIPPLE_OFFSET, params.rippleData);

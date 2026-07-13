@@ -114,9 +114,23 @@ fn normal_at(p: vec3f, m: Morph, eps: f32) -> vec3f {
     k.xxx * map(p + k.xxx * eps, m).x);
 }
 
+// Palette bank (_r1 selects): 0 follows the music key; the rest are fixed
+// moods so the cathedral can look radically different on demand.
+struct Pal { hue: f32, sat: f32, span: f32, vein_off: f32 }
+
+fn palette() -> Pal {
+  let p = i32(u._r1 + 0.5);
+  if (p == 1) { return Pal(0.02, 0.88, 0.09, 0.06); }   // ember: fire & soot
+  if (p == 2) { return Pal(0.55, 0.62, 0.10, 0.38); }   // glacier: teal ice
+  if (p == 3) { return Pal(0.83, 0.92, 0.06, 0.50); }   // synth: magenta/cyan
+  if (p == 4) { return Pal(0.08, 0.05, 0.02, 0.00); }   // bone: near-mono
+  return Pal(u.key_hue, 0.55 + u.key_conf * 0.25, 0.28, 0.45);
+}
+
 @fragment
 fn fs_render(in: VSOut) -> @location(0) vec4f {
   let aspect = u.res_x / max(u.res_y, 1.0);
+  let pal = palette();
   var sp = (in.uv - 0.5) * 2.0;
   sp.x *= aspect;
 
@@ -165,8 +179,8 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
 
   // ── Shade ────────────────────────────────────────────────────────────
   // Fog colour: near-black with the key tint, breathing with sub-bass
-  let fog_col = hsv2rgb(vec3f(u.key_hue, 0.55, 0.028 + u.sub_bass * 0.03))
-              * max(u.key_conf, 0.25);
+  let fog_col = hsv2rgb(vec3f(pal.hue, pal.sat * 0.9, 0.028 + u.sub_bass * 0.03))
+              * max(u.key_conf, 0.35);
   var col = fog_col;
 
   if (hit) {
@@ -180,9 +194,8 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
 
     // Palette: orbit trap sweeps a wide hue band around the key colour so
     // the architecture reads as carved from different minerals
-    let hue  = u.key_hue + fract(trap * 0.23) * 0.28 - 0.14
-             + u.palette_mode * 0.07;
-    let sat  = 0.55 + u.key_conf * 0.25;
+    let hue  = pal.hue + fract(trap * 0.23) * pal.span - pal.span * 0.5;
+    let sat  = pal.sat;
     let alb  = hsv2rgb(vec3f(hue, sat, 1.0));
 
     // Two-source light: camera headlight (kick-flashed) + a cool top light
@@ -202,7 +215,7 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
     let beat_glow = 1.0 + exp(-fract(u.beat_t) * 4.0) * u.beat_conf * 0.9;
     let vein = min(crevice * (0.25 + u.mid * u.mul_mid * 0.9 + u.high * u.mul_high * 0.7)
              * beat_glow, 1.4);
-    let vein_col = hsv2rgb(vec3f(hue + 0.45, 0.65, 1.0));   // complementary
+    let vein_col = hsv2rgb(vec3f(hue + pal.vein_off, mix(0.65, pal.sat, 0.5), 1.0));
 
     // God-light along the corridor axis: an endless beam we fly inside,
     // pulsing on the beat — it lights nearby walls and pulls the eye deeper
@@ -210,7 +223,7 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
     let ld  = length(p.xy - cxy);
     let beam_amp = 0.30 + exp(-fract(u.beat_t) * 4.0) * u.beat_conf * 0.45 + u.kick * 0.35;
     let beam = beam_amp / (0.5 + ld * ld * 0.22);
-    let beam_col = hsv2rgb(vec3f(u.key_hue, 0.45, 1.0));
+    let beam_col = hsv2rgb(vec3f(pal.hue, pal.sat * 0.8, 1.0));
 
     col = alb * ((head + sky) * ao + 0.020)
         + vein_col * vein * 0.7
@@ -227,7 +240,7 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
   // Far hits get the full amount, near walls almost none.
   let depth_w  = select(1.0, min(t / FAR * 1.6, 1.0), hit);
   let beat_amp = 0.10 + exp(-fract(u.beat_t) * 4.0) * u.beat_conf * 0.12 + u.kick * 0.08;
-  col += hsv2rgb(vec3f(u.key_hue, 0.4, 1.0)) * beat_amp * depth_w
+  col += hsv2rgb(vec3f(pal.hue, pal.sat * 0.7, 1.0)) * beat_amp * depth_w
        * pow(max(dot(rd, vec3f(0.0, 0.0, 1.0)), 0.0), 7.0);
 
   // Drop shockwave: white-hot radial flash from the corridor vanishing point

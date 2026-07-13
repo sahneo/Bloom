@@ -825,6 +825,29 @@ async function init() {
     }
   });
 
+  // VOID palette cycler (persisted)
+  const PAL_NAMES = ['KEY', 'EMBER', 'GLACIER', 'SYNTH', 'BONE'];
+  const btnPal = document.getElementById('btn-pal');
+  params.voidPalette = parseInt(localStorage.getItem('bloom-void-pal') ?? '0', 10) || 0;
+  btnPal.textContent = params.voidPalette ? PAL_NAMES[params.voidPalette] : 'PAL';
+  btnPal.addEventListener('click', () => {
+    params.voidPalette = (params.voidPalette + 1) % PAL_NAMES.length;
+    localStorage.setItem('bloom-void-pal', String(params.voidPalette));
+    btnPal.textContent = PAL_NAMES[params.voidPalette];
+    btnPal.classList.toggle('active', params.voidPalette > 0);
+  });
+
+  // Cymatics sand colour
+  const btnSandColor   = document.getElementById('btn-sand-color');
+  const sandColorInput = document.getElementById('sand-color-input');
+  btnSandColor.addEventListener('click', () => sandColorInput.click());
+  sandColorInput.addEventListener('input', e => {
+    const hex = e.target.value;
+    params.sandColor = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255);
+    btnSandColor.style.background  = hex + '59';
+    btnSandColor.style.borderColor = hex + 'a6';
+  });
+
   const btnAsciiColor   = document.getElementById('btn-ascii-color');
   const asciiColorInput = document.getElementById('ascii-color-input');
   btnAsciiColor.addEventListener('click', () => asciiColorInput.click());

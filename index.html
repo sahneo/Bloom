@@ -602,6 +602,27 @@
     }
     #btn-ascii-color:hover { opacity: 0.85; }
 
+    /* ── Cymatics sand colour swatch ─────────────────────────────── */
+    #btn-sand-color {
+      position: fixed;
+      bottom: 20px;
+      left: 100px;
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      border-radius: 6px;
+      opacity: 0.4;
+      pointer-events: all;
+      background: rgba(255, 214, 133, 0.35);
+      border-color: rgba(255, 214, 133, 0.65);
+      transition: opacity 0.2s;
+      font-size: 0.5rem;
+      letter-spacing: 0;
+      color: rgba(0,0,0,0.55);
+      font-weight: 700;
+    }
+    #btn-sand-color:hover { opacity: 0.85; }
+
     /* ── Reset / Random buttons ─────────────────────────────────── */
     .tune-actions {
       display: flex;
@@ -876,6 +897,7 @@
     <option value="terra">TERRA</option>
     <option value="swarm">SWARM</option>
   </select>
+  <button id="btn-pal" title="VOID palette: key / ember / glacier / synth / bone">PAL</button>
   <button id="btn-bpm">BPM</button>
   <select id="genre-select" title="Genre preset — tunes detection and visuals">
     <option value="auto" selected>AUTO</option>
@@ -1041,6 +1063,8 @@
 <input type="color" id="ripple-color-input" value="#00D9FF" style="display:none">
 <button id="btn-ascii-color" title="ASCII glyph color">A</button>
 <input type="color" id="ascii-color-input" value="#FFFFFF" style="display:none">
+<button id="btn-sand-color" title="Cymatics sand color">S</button>
+<input type="color" id="sand-color-input" value="#FFD685" style="display:none">
 
 <div id="transport" class="hidden">
   <span id="transport-name"></span>

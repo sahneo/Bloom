@@ -85,7 +85,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   bright *= 1.0 + exp(-fract(u.beat_t) * 7.0) * u.beat_conf * 0.14;
 
   // ── colour: desaturated white-gold sand, gently pulled toward key hue ─
-  let sand = vec3f(1.00, 0.84, 0.52);
+  let sand = u.extra[2].xyz;   // user-pickable sand colour
   let key  = hsv2rgb(vec3f(u.key_hue, 0.35, 1.0));
   var rgb  = mix(sand, key, u.key_conf * 0.22);
   // minor keys cool the sand slightly, major warms it
