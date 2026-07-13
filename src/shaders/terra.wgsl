@@ -158,7 +158,11 @@ fn terrainLow(xz: vec2f) -> f32 {
   let s = u.scene_seed * 3.7;
   let mass = fbm2(vec2f(xz.x * 0.16, xz.y * 0.11) + vec2f(s, s * 1.3));
   let side = 0.55 + 0.45 * smoothstep(1.2, 8.0, abs(xz.x));
-  return r.x * (0.35 + 1.55 * mass * mass) * 2.7 * side + r.y * 0.75;
+  // conservative UPPER BOUND: broad mass + max possible ridge/kick/rock
+  // detail. The camera glides over this, so it never needs a full-detail
+  // probe (a single such probe was the vertical jerk).
+  return r.x * (0.35 + 1.55 * mass * mass) * 2.7 * side
+       + r.y * 1.5 + r.z * 0.9 + 0.37;
 }
 
 // ── sky ──────────────────────────────────────────────────────────────────
@@ -216,9 +220,7 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
   for (var k = 0; k <= 5; k++) {
     gsum += terrainLow(vec2f(wx, camZ + f32(k) * 1.7));
   }
-  let glide  = gsum / 6.0 + 2.35 + sin(u.time * 0.31) * 0.10;
-  let safety = terrainH(vec2f(wx, camZ + 0.9)) + 0.55;
-  let camY   = max(glide, safety);
+  let camY = gsum / 6.0 + 1.35 + sin(u.time * 0.31) * 0.10;
   var ro = vec3f(wx, camY, camZ);
   // eruption shockwave shakes the airframe
   let shake = u.extra[0].z;

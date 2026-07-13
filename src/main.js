@@ -19,6 +19,7 @@ import { CymaticsPreset }     from './presets/cymatics.js';
 import { StormPreset }        from './presets/storm.js';
 import { TerraPreset }        from './presets/terra.js';
 import { SwarmPreset }        from './presets/swarm.js';
+import { GalaxyPreset }       from './presets/galaxy.js';
 import { WledSync }           from './wled.js';
 import posthogLib from 'posthog-js';
 
@@ -750,13 +751,23 @@ async function init() {
     storm:        StormPreset,
     terra:        TerraPreset,
     swarm:        SwarmPreset,
+    galaxy:       GalaxyPreset,
   };
   const modeSelect = document.getElementById('mode-select');
+
+  // Mode-specific controls appear only in their mode
+  function updateModeControls(mode) {
+    document.getElementById('btn-pal').style.display         = mode === 'void'     ? '' : 'none';
+    document.getElementById('btn-sand-color').style.display  = mode === 'cymatics' ? '' : 'none';
+    document.getElementById('btn-ascii-color').style.display = mode === 'ascii'    ? '' : 'none';
+  }
+  updateModeControls('particles');
 
   async function setMode(mode) {
     currentMode = mode;
     await renderer.loadPreset(MODES[mode]);
     modeSelect.value = mode;
+    updateModeControls(mode);
     posthog.capture('mode_changed', { mode });
   }
   window.__setMode = setMode;   // tests + AutoVJ preset rotation
@@ -793,7 +804,7 @@ async function init() {
   // (drops sometimes, every 16 phrases otherwise). Backs off for 45 s after
   // a manual pick so the user always wins.
   // city/galaxy join the pool once their presets land (stubs render black)
-  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm'];
+  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy'];
   let _phrasesSincePreset = 0;
 
   function rotatePreset(style) {
