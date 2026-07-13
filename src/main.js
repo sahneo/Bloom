@@ -20,6 +20,7 @@ import { StormPreset }        from './presets/storm.js';
 import { TerraPreset }        from './presets/terra.js';
 import { SwarmPreset }        from './presets/swarm.js';
 import { GalaxyPreset }       from './presets/galaxy.js';
+import { GlassPreset }        from './presets/glass.js';
 import { WledSync }           from './wled.js';
 import posthogLib from 'posthog-js';
 
@@ -752,6 +753,7 @@ async function init() {
     terra:        TerraPreset,
     swarm:        SwarmPreset,
     galaxy:       GalaxyPreset,
+    glass:        GlassPreset,
   };
   const modeSelect = document.getElementById('mode-select');
 
@@ -804,7 +806,7 @@ async function init() {
   // (drops sometimes, every 16 phrases otherwise). Backs off for 45 s after
   // a manual pick so the user always wins.
   // city/galaxy join the pool once their presets land (stubs render black)
-  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy'];
+  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass'];
   let _phrasesSincePreset = 0;
 
   function rotatePreset(style) {
