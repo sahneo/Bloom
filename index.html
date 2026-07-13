@@ -602,7 +602,32 @@
     }
     #btn-ascii-color:hover { opacity: 0.85; }
 
-    /* ── RESOLVER panel ──────────────────────────────────────────── */
+    /* ── RESOLVER / GLASS panels ─────────────────────────────────── */
+    #glass-panel {
+      position: fixed;
+      top: 52px;
+      left: 20px;
+      background: rgba(8,8,14,0.88);
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 10px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      backdrop-filter: blur(14px);
+      pointer-events: all;
+      width: 240px;
+    }
+    #glass-panel.hidden { display: none; }
+    #glass-panel .tune-actions button {
+      flex: 1;
+      padding: 6px;
+      font-size: 0.60rem;
+      letter-spacing: 0.12em;
+      border-radius: 5px;
+      opacity: 0.4;
+    }
+    #glass-panel .tune-actions button:hover { opacity: 0.85; }
     #resolver-panel {
       position: fixed;
       top: 52px;
@@ -1113,6 +1138,48 @@
     <button id="train-clear" disabled>CLEAR</button>
   </div>
   <div class="train-hint">or press Space to tap</div>
+</div>
+
+<div id="glass-panel" class="hidden">
+  <div class="train-title">GLASS</div>
+  <div class="tune-row">
+    <span class="tune-label">Ribs</span>
+    <input type="range" id="gl-ribs" min="10" max="90" step="1" value="42">
+    <span class="tune-val" id="gl-v-ribs">42</span>
+  </div>
+  <div class="tune-row">
+    <span class="tune-label">Refract</span>
+    <input type="range" id="gl-refr" min="0" max="2" step="0.05" value="1">
+    <span class="tune-val" id="gl-v-refr">1.00</span>
+  </div>
+  <div class="tune-row">
+    <span class="tune-label">Blur</span>
+    <input type="range" id="gl-blur" min="0" max="2" step="0.05" value="1">
+    <span class="tune-val" id="gl-v-blur">1.00</span>
+  </div>
+  <div class="tune-row">
+    <span class="tune-label">Light</span>
+    <input type="range" id="gl-light" min="0" max="1" step="0.05" value="0">
+    <span class="tune-val" id="gl-v-light">0.00</span>
+  </div>
+  <div class="tune-row">
+    <span class="tune-label">Grain</span>
+    <input type="range" id="gl-grain" min="0" max="1" step="0.05" value="0.1">
+    <span class="tune-val" id="gl-v-grain">0.10</span>
+  </div>
+  <div class="tune-row">
+    <span class="tune-label">Spec</span>
+    <label class="tog-wrap"><input type="checkbox" id="gl-spec"><span class="tog-pill"></span></label>
+    <span class="tune-label" style="width:auto">Source</span>
+    <select class="band-select" id="gl-src" style="flex:1">
+      <option value="blobs" selected>lights</option>
+      <option value="media">media</option>
+    </select>
+  </div>
+  <div class="tune-actions">
+    <button id="gl-preset-gloss">GLOSS</button>
+    <button id="gl-preset-matte">MATTE</button>
+  </div>
 </div>
 
 <div id="resolver-panel" class="hidden">

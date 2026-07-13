@@ -1,13 +1,18 @@
-// GLASS — fluted (reeded) glass, редизайн за мудбордом neobjects/glass-material:
-// soft organic colour fields drift BEHIND a full-screen wall of vertical
-// glass ribs. Each rib is a cylindrical lens: it refracts horizontally and
-// smears vertically (anisotropic blur), so the blobs become elegant striped
-// gradients. Thin specular lines ride the rib crests, edges get chromatic
-// dispersion, and a heavy frost grain finishes the material.
+// GLASS — fluted (reeded) glass, tunable material.
 //
-// Lights from JS in extra[]: extra[i] = (x, y, depth, brightness),
-// extra[8+i] = (hue, sat, size, -), 8 blobs. _r1 = rib melt (drops),
-// _r2 = bass breath.
+// Background = either procedural colour blobs (band-bound, key palette) or
+// the user's video/image (shared media playlist) — both physically bent by
+// one cylindrical lens per rib with chromatic dispersion at rib edges.
+// The material is fully parametric: rib count, refraction strength, frost
+// blur, light/dark studio, grain amount, crest speculars on/off — from the
+// dark glossy look to the matte editorial one, to the transparent
+// plants-behind-glass look.
+//
+// extra[0..6]  = 7 blobs (x, y, depth, brightness)
+// extra[8..14] = blob colours (hue, sat, size, -)
+// extra[7]     = (ribs, refraction, blur, light)
+// extra[15]    = (grain, spec on/off, media on/off, media aspect)
+// _r1 = rib melt (drops), _r2 = bass breath
 
 struct Uniforms {
   time:       f32, sub_bass:    f32, bass:      f32, mid:       f32,
@@ -25,6 +30,8 @@ struct Uniforms {
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
+@group(0) @binding(1) var samp: sampler;
+@group(0) @binding(2) var media: texture_2d<f32>;
 
 struct VSOut {
   @builtin(position) pos: vec4f,
@@ -48,26 +55,49 @@ fn hash21(p: vec2f) -> f32 {
   return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453);
 }
 
-const RIBS: f32 = 42.0;   // vertical flutes across the width
-
-// Colour field behind the glass: anisotropic gaussians — tight in x, long
-// in y — so the flutes read as smearing everything into vertical streaks.
-fn light_field(wp: vec2f, stretch: f32) -> vec3f {
+// Procedural blobs: anisotropic gaussians, smeared vertically by blur
+fn blob_field(wp: vec2f, blur: f32) -> vec3f {
   var col = vec3f(0.0);
-  for (var i = 0; i < 8; i++) {
-    let L = u.extra[i];          // x, y, depth, brightness
-    let C = u.extra[8 + i];      // hue, sat, size, -
+  for (var i = 0; i < 7; i++) {
+    let L = u.extra[i];
+    let C = u.extra[8 + i];
     if (L.w < 0.003) { continue; }
     let dx = wp.x - L.x;
     let dy = wp.y - L.y;
-    // depth → focus: near blobs are tighter and hotter
     let s  = C.z * mix(1.9, 0.8, L.z);
-    let sx = s * 0.55;
-    let sy = s * (1.6 + stretch * 1.4);
-    let g = L.w * exp(-(dx * dx / (sx * sx) + dy * dy / (sy * sy)) * 2.2);
-    col += hsv2rgb(vec3f(C.x, C.y, 1.0)) * g;
+    let sx = s * 0.60;
+    let sy = s * (0.9 + blur * 2.2);
+    col += hsv2rgb(vec3f(C.x, C.y, 1.0))
+         * L.w * exp(-(dx * dx / (sx * sx) + dy * dy / (sy * sy)) * 2.2);
   }
   return col;
+}
+
+// Media sample, cover-fit, with a vertical frost smear
+fn media_field(wp: vec2f, blur: f32, aspect: f32, texA: f32) -> vec3f {
+  var tuv = vec2f(wp.x / aspect, -wp.y) * 0.5;
+  if (texA > aspect) { tuv.x *= aspect / texA; }
+  else               { tuv.y *= texA / aspect; }
+  var c = vec3f(0.0);
+  for (var k = -2; k <= 2; k++) {
+    let off = f32(k) * 0.014 * blur;
+    c += textureSampleLevel(media, samp,
+           clamp(tuv + vec2f(0.0, off) + 0.5, vec2f(0.002), vec2f(0.998)), 0.0).rgb;
+  }
+  return c * 0.2;
+}
+
+fn background(wp: vec2f, blur: f32, light: f32, aspect: f32) -> vec3f {
+  let Q = u.extra[15];
+  if (Q.z > 0.5) {
+    // media brightness lifts slightly in light mode
+    return media_field(wp, blur, aspect, Q.w) * (0.85 + light * 0.5);
+  }
+  // studio backdrop: near-black ↔ warm editorial paper, key-tinted
+  let paper = mix(vec3f(0.012, 0.014, 0.018),
+                  vec3f(0.78, 0.76, 0.74) + hsv2rgb(vec3f(u.key_hue, 0.35, 0.10)),
+                  light);
+  return paper * (1.0 + u._r2 * 0.25 * (1.0 - light)) + blob_field(wp, blur);
 }
 
 @fragment
@@ -75,49 +105,49 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
   let aspect = u.res_x / max(u.res_y, 1.0);
   let wp0 = vec2f((in.uv.x - 0.5) * 2.0 * aspect, (0.5 - in.uv.y) * 2.0);
 
-  // ── fluted glass: one cylindrical lens per rib ─────────────────────────
-  // melt (drops) widens the lens action; a hair of per-rib variance keeps
-  // the wall hand-made rather than mechanical
+  let P = u.extra[7];     // ribs, refraction, blur, light
+  let Q = u.extra[15];    // grain, spec, media, texAspect
+  let RIBS = max(P.x, 4.0);
+
+  // ── fluted lens per rib ────────────────────────────────────────────────
   let melt = u._r1;
   let xr   = (wp0.x + aspect) * RIBS / (2.0 * aspect);
   let rib  = floor(xr);
-  let f    = fract(xr) - 0.5;                    // -0.5..0.5 across the rib
+  let f    = fract(xr) - 0.5;
   let rh   = hash21(vec2f(rib, u.scene_seed)) - 0.5;
-  // cylindrical refraction: strongest at rib edges, zero at the crest
-  let bend = -f * (0.34 + rh * 0.05) * melt;
+  let bend = -f * (0.34 + rh * 0.05) * melt * P.y;
   let ribW = 2.0 * aspect / RIBS;
 
-  // dispersion: R/G/B refract slightly differently near the rib edges
-  let disp = abs(f) * 0.22 * melt;
-  let wpG = vec2f(wp0.x + bend * ribW * 6.0, wp0.y);
-  let wpR = vec2f(wp0.x + bend * (1.0 + disp) * ribW * 6.0, wp0.y);
-  let wpB = vec2f(wp0.x + bend * (1.0 - disp) * ribW * 6.0, wp0.y);
-
-  let stretch = 1.0;
+  // dispersion at rib edges
+  let disp = abs(f) * 0.22 * melt * min(P.y, 1.5);
+  let shift = bend * ribW * 6.0;
   var col = vec3f(
-    light_field(wpR, stretch).r,
-    light_field(wpG, stretch).g,
-    light_field(wpB, stretch).b,
+    background(vec2f(wp0.x + shift * (1.0 + disp), wp0.y), P.z, P.w, aspect).r,
+    background(vec2f(wp0.x + shift,                wp0.y), P.z, P.w, aspect).g,
+    background(vec2f(wp0.x + shift * (1.0 - disp), wp0.y), P.z, P.w, aspect).b,
   );
 
-  // ── rib crest speculars: two thin vertical lines per flute ─────────────
-  // brightness follows what's behind + kick; hats make them shimmer
-  let behind = light_field(vec2f(wp0.x, wp0.y), 1.4);
-  let lum = dot(behind, vec3f(0.35, 0.5, 0.15));
-  let crest = exp(-pow((abs(f) - 0.30) / 0.045, 2.0));
-  let shimmer = 1.0 + u.high * u.mul_high * 0.5
-              * sin(u.time * 14.0 + rib * 3.1 + wp0.y * 5.0);
-  let spec = crest * (0.10 + lum * 1.5) * (1.0 + u.kick * 0.8) * shimmer;
-  col += vec3f(0.92, 0.95, 1.0) * spec * 0.35;
+  // ── crest speculars (optional): thin lines that catch the light ───────
+  if (Q.y > 0.5) {
+    let lum = dot(background(wp0, P.z + 0.5, P.w, aspect), vec3f(0.35, 0.5, 0.15));
+    let crest = exp(-pow((abs(f) - 0.30) / 0.045, 2.0));
+    let shimmer = 1.0 + u.high * u.mul_high * 0.5
+                * sin(u.time * 14.0 + rib * 3.1 + wp0.y * 5.0);
+    col += vec3f(0.92, 0.95, 1.0)
+         * crest * (0.10 + lum * 1.5) * (1.0 + u.kick * 0.8) * shimmer * 0.35;
+  }
 
-  // soft shadow in the rib grooves — gives the wall its relief
-  col *= 0.82 + 0.18 * cos(f * 6.28318);
+  // groove shading: soft in matte/light, crisp gloss edge highlight in dark
+  let relief = mix(0.13, 0.22, clamp(P.y * 0.7, 0.0, 1.0));
+  col *= (1.0 - relief) + relief * cos(f * 6.28318);
+  // glossy sheen: smooth broad reflection running down each rib flank
+  let gloss = clamp(1.0 - Q.x * 1.4, 0.0, 1.0);   // grain kills gloss
+  let sheen = pow(max(cos((f + 0.18) * 3.14159), 0.0), 8.0);
+  col += (vec3f(0.06, 0.065, 0.075) + col * 0.35) * sheen * gloss;
 
-  // ── frost: heavy fine grain, the matte surface itself ──────────────────
-  let grain = hash21(in.uv * u.res_x + vec2f(fract(u.time * 0.9) * 17.0));
-  col *= 0.90 + grain * 0.20;
-  // faint cool ambient so black stays airy, breathing with the bass
-  col += vec3f(0.012, 0.014, 0.018) * (1.0 + u._r2 * 0.9);
+  // ── grain: the matte surface (0 = polished) ───────────────────────────
+  let g1 = hash21(in.uv * u.res_x + vec2f(fract(u.time * 0.9) * 17.0));
+  col *= 1.0 + (g1 - 0.5) * Q.x * 0.55;
 
   return vec4f(col, u.trail_gain);
 }

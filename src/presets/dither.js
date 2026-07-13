@@ -49,6 +49,7 @@ export async function addMediaFiles(files) {
 }
 
 export function mediaCount() { return playlist.items.length; }
+export function currentMediaItem() { return playlist.items[playlist.index] ?? null; }
 
 // Playlist editing API for the RESOLVER panel
 export const mediaApi = {

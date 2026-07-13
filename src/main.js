@@ -764,8 +764,9 @@ async function init() {
     document.getElementById('btn-pal').style.display         = mode === 'void'     ? '' : 'none';
     document.getElementById('btn-sand-color').style.display  = mode === 'cymatics' ? '' : 'none';
     document.getElementById('btn-ascii-color').style.display = mode === 'ascii'    ? '' : 'none';
-    document.getElementById('btn-media').style.display       = mode === 'dither'   ? '' : 'none';
+    document.getElementById('btn-media').style.display       = (mode === 'dither' || mode === 'glass') ? '' : 'none';
     document.getElementById('resolver-panel').classList.toggle('hidden', mode !== 'dither');
+    document.getElementById('glass-panel').classList.toggle('hidden', mode !== 'glass');
   }
   updateModeControls('particles');
 
@@ -854,6 +855,38 @@ async function init() {
   document.getElementById('rs-cut').addEventListener('change', e => {
     params.rsCutBars = parseInt(e.target.value, 10);
   });
+
+  // GLASS panel → params
+  const GL_SLIDERS = [['gl-ribs', 'glRibs', 'gl-v-ribs', 0],
+                      ['gl-refr', 'glRefr', 'gl-v-refr', 2],
+                      ['gl-blur', 'glBlur', 'gl-v-blur', 2],
+                      ['gl-light', 'glLight', 'gl-v-light', 2],
+                      ['gl-grain', 'glGrain', 'gl-v-grain', 2]];
+  for (const [id, key, vid, dec] of GL_SLIDERS) {
+    const sl = document.getElementById(id);
+    sl.addEventListener('input', () => {
+      params[key] = parseFloat(sl.value);
+      document.getElementById(vid).textContent = parseFloat(sl.value).toFixed(dec);
+    });
+  }
+  document.getElementById('gl-spec').addEventListener('change', e => { params.glSpec = e.target.checked; });
+  document.getElementById('gl-src').addEventListener('change', e => { params.glSrc = e.target.value; });
+  function glApplyPreset(vals) {
+    for (const [id, key, vid, dec] of GL_SLIDERS) {
+      if (key in vals) {
+        const sl = document.getElementById(id);
+        sl.value = vals[key];
+        params[key] = vals[key];
+        document.getElementById(vid).textContent = vals[key].toFixed(dec);
+      }
+    }
+    document.getElementById('gl-spec').checked = !!vals.glSpec;
+    params.glSpec = !!vals.glSpec;
+  }
+  document.getElementById('gl-preset-gloss').addEventListener('click', () =>
+    glApplyPreset({ glRefr: 1.15, glBlur: 0.45, glLight: 0.1, glGrain: 0.03, glSpec: false }));
+  document.getElementById('gl-preset-matte').addEventListener('click', () =>
+    glApplyPreset({ glRefr: 0.55, glBlur: 1.55, glLight: 0.55, glGrain: 0.65, glSpec: false }));
 
   modeSelect.addEventListener('change', () => {
     lastManualModeMs = performance.now();
