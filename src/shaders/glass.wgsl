@@ -55,20 +55,33 @@ fn hash21(p: vec2f) -> f32 {
   return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453);
 }
 
-// Procedural blobs: anisotropic gaussians, smeared vertically by blur
+// Procedural blobs: organic pen-tool shapes, not ovals. Each blob's radius
+// is modulated by low radial harmonics whose phases and amplitudes drift
+// slowly — the silhouette breathes and stretches like a lava lamp. Frost
+// blur still smears them vertically.
 fn blob_field(wp: vec2f, blur: f32) -> vec3f {
   var col = vec3f(0.0);
   for (var i = 0; i < 7; i++) {
     let L = u.extra[i];
     let C = u.extra[8 + i];
     if (L.w < 0.003) { continue; }
-    let dx = wp.x - L.x;
-    let dy = wp.y - L.y;
-    let s  = C.z * mix(1.9, 0.8, L.z);
-    let sx = s * 0.60;
-    let sy = s * (0.9 + blur * 2.2);
-    col += hsv2rgb(vec3f(C.x, C.y, 1.0))
-         * L.w * exp(-(dx * dx / (sx * sx) + dy * dy / (sy * sy)) * 2.2);
+    let sd = f32(i) * 7.31 + u.scene_seed * 1.7;
+    // proportions swing slowly (lava-lamp stretch)
+    let stretchP = 1.0 + 0.45 * sin(u.time * 0.055 + sd * 2.2);
+    var dx = (wp.x - L.x) / stretchP;
+    var dy = (wp.y - L.y) * stretchP / (1.0 + blur * 1.6);
+    let ang = atan2(dy, dx);
+    // pen-tool silhouette: 2nd/3rd/5th harmonics, amplitudes themselves
+    // modulated so the shape keeps morphing and never repeats
+    let a2 = 0.24 + 0.14 * sin(u.time * 0.043 + sd);
+    let a3 = 0.18 + 0.12 * sin(u.time * 0.061 + sd * 3.1);
+    let rMod = 1.0
+             + a2 * sin(2.0 * ang + u.time * 0.19 + sd * 11.0)
+             + a3 * sin(3.0 * ang - u.time * 0.14 + sd * 5.7)
+             + 0.10 * sin(5.0 * ang + u.time * 0.23 + sd * 3.3);
+    let s = C.z * mix(1.9, 0.8, L.z) * 0.85 * rMod;
+    let d2 = (dx * dx + dy * dy) / (s * s);
+    col += hsv2rgb(vec3f(C.x, C.y, 1.0)) * L.w * exp(-d2 * 2.0);
   }
   return col;
 }

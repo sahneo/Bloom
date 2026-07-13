@@ -9,14 +9,28 @@ import { currentMediaItem } from './dither.js';
 // panel: params.glRibs/glRefr/glBlur/glLight/glGrain/glSpec/glSrc.
 
 const LIGHTS = [
-  { band: 'kick',    depth: 0.85, hueOff: 0.02,  speed: 0.07,  size: 0.60 },
-  { band: 'snare',   depth: 0.65, hueOff: 0.50,  speed: 0.09,  size: 0.45 },
-  { band: 'bass',    depth: 0.25, hueOff: 0.07,  speed: 0.035, size: 0.95 },
-  { band: 'subBass', depth: 0.10, hueOff: -0.05, speed: 0.022, size: 1.15 },
-  { band: 'mid',     depth: 0.55, hueOff: 0.12,  speed: 0.12,  size: 0.55 },
-  { band: 'mid',     depth: 0.45, hueOff: -0.10, speed: 0.14,  size: 0.50 },
-  { band: 'high',    depth: 0.80, hueOff: 0.18,  speed: 0.18,  size: 0.34 },
+  { band: 'kick',    depth: 0.85, speed: 0.07,  size: 0.60 },
+  { band: 'snare',   depth: 0.65, speed: 0.09,  size: 0.45 },
+  { band: 'bass',    depth: 0.25, speed: 0.035, size: 0.95 },
+  { band: 'subBass', depth: 0.10, speed: 0.022, size: 1.15 },
+  { band: 'mid',     depth: 0.55, speed: 0.12,  size: 0.55 },
+  { band: 'mid',     depth: 0.45, speed: 0.14,  size: 0.50 },
+  { band: 'high',    depth: 0.80, speed: 0.18,  size: 0.34 },
 ];
+
+// Harmonious palettes: per-blob hue offsets from the track key + saturation.
+// One scheme rules an epoch, then rotates.
+const PALETTES = [
+  { name: 'analogous',  off: [0, 0.05, 0.10, -0.05, -0.09, 0.07, -0.03], sat: 0.72 },
+  { name: 'pastel',     off: [0, 0.04, 0.08, -0.04, -0.08, 0.06, -0.02], sat: 0.42 },
+  { name: 'duotone',    off: [0, 0, 0.5, 0.5, 0, 0.5, 0],                sat: 0.68 },
+  { name: 'triadic',    off: [0, 0.33, 0.66, 0, 0.33, 0.66, 0],          sat: 0.60 },
+  { name: 'split-comp', off: [0, 0.42, 0.58, 0, 0.42, 0.58, 0.5],        sat: 0.66 },
+];
+
+// Movement epochs: the blobs' choreography itself changes over time.
+// Targets are eased into, so switches glide instead of jumping.
+const MOVES = ['drift', 'orbit', 'lava', 'chase'];
 
 export class GlassPreset {
   constructor() {
@@ -29,6 +43,51 @@ export class GlassPreset {
     this._seed = Math.random() * 100;
     this._extra = new Float32Array(64);
     this._texFor = null;
+
+    // choreography epochs
+    this._move = 0;
+    this._pal  = (Math.random() * PALETTES.length) | 0;
+    this._epochT = 0;
+    this._epochLen = 24;
+    this._pos = LIGHTS.map(() => ({ x: 0, y: 0 }));
+  }
+
+  _moveTarget(mode, i, t, aspect) {
+    const L = LIGHTS[i];
+    const s = this._seed + i * 13.7;
+    switch (MOVES[mode]) {
+      case 'orbit': {
+        // everyone circles a slowly wandering centre, each on its own ring
+        const cx = Math.sin(t * 0.031 + this._seed) * 0.3 * aspect;
+        const cy = Math.cos(t * 0.024 + this._seed * 2) * 0.25;
+        const r  = 0.25 + (i / LIGHTS.length) * 0.55;
+        const a  = t * L.speed * 2.2 + s;
+        return { x: cx + Math.cos(a) * r * aspect * 0.7, y: cy + Math.sin(a) * r };
+      }
+      case 'lava': {
+        // near-vertical columns, blobs slowly floating up and down
+        const col = ((i / LIGHTS.length) * 2 - 1) * 0.75 * aspect;
+        return {
+          x: col + Math.sin(t * 0.05 + s) * 0.12 * aspect,
+          y: Math.sin(t * L.speed * 3.0 + s * 1.7) * 0.75,
+        };
+      }
+      case 'chase': {
+        // a leader roams; everyone follows the same path with a lag
+        const td = t - i * 0.9;
+        return {
+          x: Math.sin(td * 0.16 + this._seed) * 0.6 * aspect,
+          y: Math.cos(td * 0.13 + this._seed * 1.7) * 0.55,
+        };
+      }
+      default: {   // drift — free incommensurate wander
+        const w = t * L.speed;
+        return {
+          x: Math.sin(w + s) * 0.62 * aspect + Math.sin(w * 0.37 + s * 2.1) * 0.25,
+          y: Math.cos(w * 0.83 + s * 1.7) * 0.58 + Math.sin(w * 0.29 + s * 0.6) * 0.22,
+        };
+      }
+    }
   }
 
   async init(device, format, canvas) {
@@ -137,22 +196,35 @@ export class GlassPreset {
     const wantMedia = params.glSrc === 'media';
     const texAspect = wantMedia ? this._updateMedia() : 0;
 
+    // choreography epoch: movement mode + palette rotate every 20-45 s
+    // (and on drops), targets eased so the change glides in
+    this._epochT += dt;
+    if (this._epochT > this._epochLen || (drop > 0.5 && this._prevDrop <= 0.5)) {
+      this._epochT = 0;
+      this._epochLen = 20 + Math.random() * 25;
+      this._move = (this._move + 1 + ((Math.random() * (MOVES.length - 1)) | 0)) % MOVES.length;
+      this._pal  = (this._pal  + 1 + ((Math.random() * (PALETTES.length - 1)) | 0)) % PALETTES.length;
+    }
+    this._prevDrop = drop;
+    const pal = PALETTES[this._pal];
+    const ease = 1 - Math.exp(-dt * 0.7);
+
     const e = this._extra;
     for (let i = 0; i < LIGHTS.length; i++) {
       const L = LIGHTS[i];
-      const s = this._seed + i * 13.7;
-      const w = t * L.speed;
-      const x = Math.sin(w * 1.00 + s) * 0.62 * aspect + Math.sin(w * 0.37 + s * 2.1) * 0.25;
-      const y = Math.cos(w * 0.83 + s * 1.7) * 0.58 + Math.sin(w * 0.29 + s * 0.6) * 0.22;
+      const tg = this._moveTarget(this._move, i, t, aspect);
+      const P = this._pos[i];
+      P.x += (tg.x - P.x) * ease;
+      P.y += (tg.y - P.y) * ease;
       const level = bands[L.band] ?? 0;
       const bright = 0.04 + level * 0.50 + this._flash[i] * 0.6
                    + (L.band === 'bass' ? this._bassEma * 0.25 : 0);
-      e[i * 4]     = x;
-      e[i * 4 + 1] = y;
+      e[i * 4]     = P.x;
+      e[i * 4 + 1] = P.y;
       e[i * 4 + 2] = L.depth;
       e[i * 4 + 3] = bright;
-      e[32 + i * 4]     = (params.keyHue ?? 0) + L.hueOff;
-      e[32 + i * 4 + 1] = 0.72;
+      e[32 + i * 4]     = (params.keyHue ?? 0) + pal.off[i];
+      e[32 + i * 4 + 1] = pal.sat;
       e[32 + i * 4 + 2] = L.size;
     }
     // material params → extra[7] and extra[15]

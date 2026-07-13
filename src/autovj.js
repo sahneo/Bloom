@@ -66,9 +66,8 @@ export class AutoVJ {
     // Palette roles: mono / duotone / complementary / analogous
     const pr = Math.random();
     this.params.paletteMode = pr < 0.25 ? 0 : pr < 0.50 ? 1 : pr < 0.80 ? 2 : 3;
-    // Kaleidoscope: rare spice — a mandala every ~8th scene, never the dull 2-mirror
-    const kr = Math.random();
-    this.params.kaleidoK = kr < 0.88 ? 0 : kr < 0.95 ? 4 : 6;
+    // Kaleidoscope retired — it kept reading as a cheap mandala
+    this.params.kaleidoK = 0;
     // Anamorphic streaks: a rare scene flavour (~1 in 10), not a constant
     this.params.anamorphicScene = Math.random() < 0.10 ? 0.7 : 0;
     // Composition centre: ~40% centred, else committed off-centre
@@ -95,10 +94,6 @@ export class AutoVJ {
     this.params.dropFlash  = (this.params.dropFlash  ?? 0) * Math.exp(-dtS * 7);
     this.params.dropInvert = (this.params.dropInvert ?? 0) * Math.exp(-dtS * 3.5);
     this.params.zoomPunch  = (this.params.zoomPunch  ?? 0) * Math.exp(-dtS * 3);
-    if (this._kaleidoBurstMs > 0) {
-      this._kaleidoBurstMs -= dtS * 1000;
-      if (this._kaleidoBurstMs <= 0) this.params.kaleidoK = this._kaleidoPrev ?? 0;
-    }
 
     if (!this.enabled) { this._trailBias *= 0.98; this.params.trailBias = this._trailBias; return; }
 
@@ -118,14 +113,9 @@ export class AutoVJ {
       // Drop flavour deck — the physics shockwave always fires (dropPulse),
       // but the visual garnish varies so drops stay surprising
       const fx = Math.random();
-      if      (fx < 0.35) { /* pure shockwave */ }
-      else if (fx < 0.55) { this.params.dropFlash = 0.85; }
-      else if (fx < 0.72) { this.params.dropInvert = 1; }
-      else if (fx < 0.88) {
-        this._kaleidoBurstMs = 1800;
-        this._kaleidoPrev    = this.params.kaleidoK;
-        this.params.kaleidoK = Math.random() < 0.5 ? 4 : 6;
-      }
+      if      (fx < 0.40) { /* pure shockwave */ }
+      else if (fx < 0.65) { this.params.dropFlash = 0.85; }
+      else if (fx < 0.85) { this.params.dropInvert = 1; }
       else { this.params.zoomPunch = 1; }
     }
 
