@@ -15,6 +15,17 @@ const playlist = {
   onchange: null,
 };
 
+// Only the ACTIVE video plays — 7 playing at once gets background decoders
+// evicted by Chrome and copyExternalImageToTexture starts throwing
+// ("no back resource"), which killed the render loop.
+function syncPlayback() {
+  playlist.items.forEach((it, i) => {
+    if (it.kind !== 'video') return;
+    if (i === playlist.index) it.el.play().catch(() => {});
+    else if (!it.el.paused) it.el.pause();
+  });
+}
+
 export async function addMediaFiles(files) {
   for (const file of files) {
     const url = URL.createObjectURL(file);
@@ -25,7 +36,6 @@ export async function addMediaFiles(files) {
         v.oncanplay = res; v.onerror = rej;
       }).catch(() => null);
       if (v.videoWidth) {
-        v.play().catch(() => {});
         playlist.items.push({ kind: 'video', el: v, url, name: file.name, w: v.videoWidth, h: v.videoHeight });
       }
     } else if (file.type.startsWith('image')) {
@@ -33,6 +43,7 @@ export async function addMediaFiles(files) {
       if (bmp) playlist.items.push({ kind: 'image', el: bmp, name: file.name, w: bmp.width, h: bmp.height });
     }
   }
+  syncPlayback();
   playlist.onchange?.();
   return playlist.items.length;
 }
@@ -45,7 +56,7 @@ export const mediaApi = {
   index: () => playlist.index,
   onchange: (fn) => { playlist.onchange = fn; },
   select(i) {
-    if (playlist.items[i]) { playlist.index = i; playlist.onchange?.(); }
+    if (playlist.items[i]) { playlist.index = i; syncPlayback(); playlist.onchange?.(); }
   },
   remove(i) {
     const item = playlist.items[i];
@@ -53,6 +64,7 @@ export const mediaApi = {
     if (item.kind === 'video') { item.el.pause(); URL.revokeObjectURL(item.url); }
     playlist.items.splice(i, 1);
     if (playlist.index >= playlist.items.length) playlist.index = 0;
+    syncPlayback();
     playlist.onchange?.();
   },
 };
@@ -135,6 +147,7 @@ export class DitherPreset {
   _cut() {
     if (playlist.items.length > 1) {
       playlist.index = (playlist.index + 1) % playlist.items.length;
+      syncPlayback();
       playlist.onchange?.();
     }
     this._kbSeed = Math.random() * 10;
@@ -153,8 +166,10 @@ export class DitherPreset {
       this._texFor = item;
       this._rebind();
       if (item.kind === 'image') {
-        this.device.queue.copyExternalImageToTexture(
-          { source: item.el }, { texture: this.mediaTex }, [item.w, item.h]);
+        try {
+          this.device.queue.copyExternalImageToTexture(
+            { source: item.el }, { texture: this.mediaTex }, [item.w, item.h]);
+        } catch (_) { /* keep last frame */ }
       }
       if (item.kind === 'video') item.el.play().catch(() => {});
     }
@@ -163,8 +178,12 @@ export class DitherPreset {
       if (Math.abs(item.el.playbackRate - rate) > 0.01) item.el.playbackRate = rate;
     }
     if (item.kind === 'video' && item.el.readyState >= 2) {
-      this.device.queue.copyExternalImageToTexture(
-        { source: item.el }, { texture: this.mediaTex }, [item.w, item.h]);
+      // Chrome can momentarily drop the video's GPU frame (seek, loop wrap,
+      // decoder pressure) — one missed copy must never kill the loop
+      try {
+        this.device.queue.copyExternalImageToTexture(
+          { source: item.el }, { texture: this.mediaTex }, [item.w, item.h]);
+      } catch (_) { /* keep last frame */ }
     }
     return true;
   }

@@ -1205,7 +1205,12 @@ async function init() {
     // Warped clock: tension accelerates all field motion, monotonic so the
     // field phase never jumps when tension eases off
     fieldMs += dtS * 1000 * (1 + st.tension * 0.6);
-    renderer.render(fieldMs, bands, params);
+    // A preset throwing once must not kill the whole animation loop
+    try {
+      renderer.render(fieldMs, bands, params);
+    } catch (e) {
+      if ((window.__renderErrs = (window.__renderErrs ?? 0) + 1) < 5) console.error('[render]', e);
+    }
     wled.update(ts);
     // If the relay died mid-stream WledSync gives up on its own — reflect that
     if (!wled.active && btnWled.classList.contains('active')) btnWled.classList.remove('active');
