@@ -140,13 +140,23 @@ fn cloud_layer(sp: vec2f, scale: f32, speed: f32, seed: f32, cov: f32) -> vec2f 
   q.y -= u.time * speed * 0.23;
   let w = vec2f(fbm(q * 1.6 + vec2f(0.0, u.time * 0.10)),
                 fbm(q * 1.6 + vec2f(5.2, u.time * 0.09 + 1.3)));
-  let qq = q + (w - 0.5) * 1.7;
+  let qq = q + (w - 0.5) * (1.7 + u.bass * u.mul_bass * 0.9);
   let n = fbm(qq);
   let d = smoothstep(cov, cov + 0.40, n);
   // density thins upward → surface faces the sky → lit
   let n_up = fbm(qq + vec2f(0.0, 0.16));
   let shade = clamp(0.45 + (n - n_up) * 3.2, 0.0, 1.0);
   return vec2f(d, shade);
+}
+
+// Thin falling dashes on a hashed grid; slanted, wrapping vertically
+fn rain_layer(sp: vec2f, scale: f32, speed: f32) -> f32 {
+  let p = vec2f(sp.x * scale * 0.55 + sp.y * 1.2, (sp.y + u.time * speed) * scale * 0.16);
+  let i = floor(p);
+  let f = fract(p);
+  let h = hash11(i.x * 91.7 + i.y * 37.3);
+  let on = step(0.70, h);
+  return on * smoothstep(0.10, 0.0, abs(f.x - 0.5)) * smoothstep(0.50, 0.30, abs(f.y - 0.5));
 }
 
 @fragment
@@ -179,7 +189,7 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
     let w = max(ex.y, 0.4);
     bolt_core  += inten * env * exp(-d * d / (0.000045 * w * w));
     bolt_glow  += inten * env * exp(-d * (17.0 / w));
-    cloud_light += inten * (env * 0.8 + aglow * 0.22) / (1.0 + d * d * 48.0);
+    cloud_light += inten * (env * 1.15 + aglow * 0.26) / (1.0 + d * d * 20.0);
   }
 
   // ── Sky behind the deck: near-black night, faint key-hue horizon ──────
@@ -191,7 +201,7 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
   let energy   = clamp(u._r2, 0.0, 1.0);
   let cov      = 0.34 - u.tension * 0.10 - energy * 0.03;      // thicken on builds
   let lightmul = 1.0 - u.tension * 0.50;                        // darken on builds
-  let flash    = clamp(u._r1, 0.0, 2.0) * 0.6 + u.drop_pulse * 0.3;  // sky-wide discharge
+  let flash    = clamp(u._r1, 0.0, 2.0) * 1.05 + u.drop_pulse * 0.45;  // sky-wide discharge
   // vertical mass: heavy overhead, ragged toward the horizon
   let vmask = 0.38 + 0.62 * smoothstep(-0.9, 0.25, sp.y);
 
@@ -232,6 +242,14 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
   lc = albedo * (0.048 + near.y * 0.085 + flash * 0.18) * lightmul
      + lightning_tint * cloud_light * 0.32;
   col = mix(col, lc, near_d * 0.92);
+
+  // ── Rain: two parallax layers of streaks, revealed by the light ───────
+  // Rain is nearly invisible in the dark and flares up whenever a bolt or
+  // sheet flash lights the air — like real storm footage.
+  let rain_amt = 0.25 + energy * 0.75;
+  let rlight   = 0.18 + flash * 1.6 + cloud_light * 1.1 + bolt_glow * 0.8;
+  let rn = rain_layer(sp, 16.0, 2.6) + rain_layer(sp, 27.0, 3.8) * 0.6;
+  col += vec3f(0.62, 0.70, 0.86) * rn * rain_amt * rlight * 0.22;
 
   // ── Sky-wide flash on drops (clouds already brightened via `flash`) ────
   col += vec3f(1.0, 0.97, 0.92) * flash * 0.12 * (0.4 + 0.6 * vmask);
