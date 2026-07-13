@@ -771,6 +771,7 @@ async function init() {
     document.getElementById('btn-media').style.display       = (mode === 'dither' || mode === 'glass') ? '' : 'none';
     document.getElementById('resolver-panel').classList.toggle('hidden', mode !== 'dither');
     document.getElementById('glass-panel').classList.toggle('hidden', mode !== 'glass');
+    document.getElementById('btn-prism-env').style.display = mode === 'prism' ? '' : 'none';
   }
   updateModeControls('particles');
 
@@ -875,6 +876,11 @@ async function init() {
   }
   document.getElementById('gl-spec').addEventListener('change', e => { params.glSpec = e.target.checked; });
   document.getElementById('gl-shape').addEventListener('change', e => { params.glShape = parseInt(e.target.value, 10); });
+  const btnPrismEnv = document.getElementById('btn-prism-env');
+  btnPrismEnv.addEventListener('click', () => {
+    params.prismClassic = !params.prismClassic;
+    btnPrismEnv.textContent = params.prismClassic ? 'CLASSIC' : 'STUDIO';
+  });
   document.getElementById('gl-src').addEventListener('change', e => { params.glSrc = e.target.value; });
   function glApplyPreset(vals) {
     for (const [id, key, vid, dec] of GL_SLIDERS) {

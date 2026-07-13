@@ -58,6 +58,10 @@ export class PrismPreset {
     if (kick > 0.45 && this._prevKick <= 0.45) this._kickEnv = Math.min(0.5 + kick * 0.8, 1.4);
     this._prevKick = kick;
     this._kickEnv *= Math.exp(-dt * 7);
+    const snare = bands.snare ?? 0;
+    if (snare > 0.5 && (this._prevSnare ?? 0) <= 0.5) this._snareEnv = Math.min(0.5 + snare * 0.7, 1.2);
+    this._prevSnare = snare;
+    this._snareEnv = (this._snareEnv ?? 0) * Math.exp(-dt * 5);
 
     // drop → shatter: radial impulse, spring home over ~2s
     const drop = params.dropPulse ?? 0;
@@ -91,6 +95,8 @@ export class PrismPreset {
       e[i * 4 + 2] = Math.sin(t * (0.07 + i * 0.027) + s * 0.6) * 0.45 * spread + O.z;
       e[i * 4 + 3] = 0.34 + (i % 3) * 0.10 + (bands.subBass ?? 0) * 0.10;
     }
+    e[24] = this._snareEnv ?? 0;                        // strip-bank flash
+    e[25] = (params.prismClassic ?? false) ? 1 : 0;     // classic minimal env
     e[28] = this._kickEnv;                              // key-light flare
     e[29] = 0.5 + (params.dissonance ?? 0) * 0.7;       // iridescence amount
     e[30] = bands.mid ?? 0;

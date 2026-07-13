@@ -60,9 +60,12 @@ fn map(p: vec3f) -> f32 {
     let ds = length(p - B.xyz) - B.w;
     d = smin(d, ds, 0.38);
   }
-  // slow surface ripple — molten, not rigid
+  // slow molten ripple + micro-shiver riding the highs: the highlights
+  // physically tremble with the hats
   d += sin(p.x * 6.1 + u.time * 0.7) * sin(p.y * 5.3 - u.time * 0.5)
      * sin(p.z * 4.7 + u.time * 0.6) * 0.012;
+  d += sin(p.x * 19.0 + u.time * 3.1) * sin(p.y * 17.0 - u.time * 2.7)
+     * 0.004 * u.extra[7].w;
   return d;
 }
 
@@ -76,28 +79,52 @@ fn normal_at(p: vec3f) -> vec3f {
     k.xxx * map(p + k.xxx * e));
 }
 
-// Studio environment (direction-indexed): dark void + three lights.
-// Music rides the lamps: kick flares the key, mid/high feed the others.
-fn env(d: vec3f) -> vec3f {
+// Studio environment (direction-indexed). soft=1 for reflections;
+// larger soft = out-of-focus version for the visible backdrop.
+// Music rides the lamps: kick flares the key, mid/high feed fills,
+// snare (extra[6].x) flashes the strip bank.
+fn env(d: vec3f, soft: f32) -> vec3f {
   let P = u.extra[7];
+  let snare = u.extra[6].x;
+  let rich = 1.0 - u.extra[6].y;   // 0 = classic minimal studio
   var c = vec3f(0.010) + vec3f(0.020, 0.022, 0.028) * (d.y * 0.5 + 0.5);
+  // key-hue haze low on the horizon — ties the scene to the track
+  c += hsv2rgb(vec3f(u.key_hue, 0.55, 0.10)) * max(u.key_conf, 0.3)
+     * pow(max(1.0 - abs(d.y + 0.15) * 2.2, 0.0), 2.0) * rich;
   // wide softbox — the broad white bands liquid chrome lives on
   c += vec3f(1.0, 0.99, 0.97)
-     * pow(max(dot(d, normalize(vec3f(0.35, 0.60, -0.72))), 0.0), 9.0)
+     * pow(max(dot(d, normalize(vec3f(0.35, 0.60, -0.72))), 0.0), 9.0 / soft)
      * (1.6 + P.x * 1.2);
-  // key light — hard hot core inside the softbox, kick-flared
+  // key light — hard hot core, kick-flared
   c += vec3f(1.0, 0.98, 0.95)
-     * pow(max(dot(d, normalize(vec3f(0.45, 0.68, -0.55))), 0.0), 320.0)
-     * (22.0 + P.x * 26.0);
+     * pow(max(dot(d, normalize(vec3f(0.45, 0.68, -0.55))), 0.0), 320.0 / soft)
+     * (22.0 + P.x * 26.0) / soft;
+  // strip-light bank: parallel vertical tubes — the signature chrome
+  // reflections; snare sweeps a flash across them
+  let bd = max(dot(d, normalize(vec3f(-0.15, 0.10, -0.97))), 0.0);
+  let ang = atan2(d.x, -d.z);
+  let tubes = pow(0.5 + 0.5 * sin(ang * 26.0 + u.time * 0.15), 24.0 / soft);
+  c += vec3f(0.85, 0.92, 1.08) * pow(bd, 5.0 / soft) * tubes
+     * (1.5 + snare * 4.0 + P.z * 1.5) * rich;
   // broad cool fill
   c += vec3f(0.70, 0.78, 0.95)
-     * pow(max(dot(d, normalize(vec3f(-0.70, 0.05, -0.60))), 0.0), 14.0)
+     * pow(max(dot(d, normalize(vec3f(-0.70, 0.05, -0.60))), 0.0), 14.0 / soft)
      * (0.9 + P.z * 1.8);
   // low warm strip
   c += vec3f(1.0, 0.80, 0.55)
-     * pow(max(dot(d, normalize(vec3f(0.05, -0.80, -0.45))), 0.0), 30.0)
+     * pow(max(dot(d, normalize(vec3f(0.05, -0.80, -0.45))), 0.0), 30.0 / soft)
      * (0.8 + P.w * 3.0);
   return c;
+}
+
+// Interior thickness along a refracted ray → absorption depth
+fn thickness(p0: vec3f, dir: vec3f) -> f32 {
+  var t = 0.04;
+  for (var i = 0; i < 8; i++) {
+    if (map(p0 + dir * t) > 0.002) { break; }
+    t += 0.14;
+  }
+  return t;
 }
 
 @fragment
@@ -133,13 +160,17 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
     let fres = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
 
     // reflection: hard chrome highlights
-    let refl = env(reflect(rd, n));
+    let refl = env(reflect(rd, n), 1.0);
 
     // refraction with dispersion — R/G/B bend differently through the mass
     let rR = refract(rd, n, 0.655);
     let rG = refract(rd, n, 0.670);
     let rB = refract(rd, n, 0.685);
-    let refr = vec3f(env(rR).r, env(rG).g, env(rB).b) * vec3f(0.94, 0.96, 0.98);
+    var refr = vec3f(env(rR, 1.0).r, env(rG, 1.0).g, env(rB, 1.0).b);
+    // absorption: thick glass drinks the light into a deep teal — gives
+    // the mass real volume instead of a hollow shell
+    let th = thickness(p + rG * 0.02, rG);
+    refr *= mix(vec3f(1.0), exp(-th * vec3f(1.6, 0.75, 0.55)), 1.0 - u.extra[6].y);
 
     col = mix(refr, refl * 1.25, clamp(0.30 + fres * 0.75, 0.0, 1.0));
 
@@ -148,9 +179,10 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
                              0.75, 1.0));
     col += irid * pow(fres, 2.5) * P.y * (0.25 + u.beat_conf * exp(-fract(u.beat_t) * 5.0) * 0.20);
   } else {
-    // void: near-black with the faintest floor bounce
-    col = vec3f(0.005, 0.005, 0.007)
-        + vec3f(0.010, 0.011, 0.014) * pow(max(-rd.y, 0.0), 2.0);
+    // backdrop: the same studio far out of focus (classic = near-black void)
+    let void_c = vec3f(0.005, 0.005, 0.007)
+               + vec3f(0.010, 0.011, 0.014) * pow(max(-rd.y, 0.0), 2.0);
+    col = mix(env(rd, 7.0) * 0.16 * (1.0 - length(sp) * 0.22), void_c, u.extra[6].y);
   }
 
   // subtle grain so the black isn't digital-dead
