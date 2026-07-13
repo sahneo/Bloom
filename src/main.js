@@ -870,6 +870,7 @@ async function init() {
     });
   }
   document.getElementById('gl-spec').addEventListener('change', e => { params.glSpec = e.target.checked; });
+  document.getElementById('gl-shape').addEventListener('change', e => { params.glShape = parseInt(e.target.value, 10); });
   document.getElementById('gl-src').addEventListener('change', e => { params.glSrc = e.target.value; });
   function glApplyPreset(vals) {
     for (const [id, key, vid, dec] of GL_SLIDERS) {

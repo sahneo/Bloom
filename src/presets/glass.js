@@ -233,7 +233,7 @@ export class GlassPreset {
     e[30] = params.glBlur  ?? 1;
     e[31] = params.glLight ?? 0;
     e[60] = params.glGrain ?? 0.08;
-    e[61] = (params.glSpec ?? false) ? 1 : 0;
+    e[61] = ((params.glSpec ?? false) ? 1 : 0) + (params.glShape ?? 0) * 2;
     e[62] = wantMedia && texAspect > 0 ? 1 : 0;
     e[63] = texAspect || 1.77;
 
