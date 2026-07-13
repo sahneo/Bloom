@@ -151,6 +151,16 @@ fn terrainH(xz: vec2f) -> f32 {
   return h;
 }
 
+// Broad-mass-only height (no ridges/spikes/rock noise) — the camera path
+// rides this so the flight glides instead of jittering over detail
+fn terrainLow(xz: vec2f) -> f32 {
+  let r = sampleRows(xz.y);
+  let s = u.scene_seed * 3.7;
+  let mass = fbm2(vec2f(xz.x * 0.16, xz.y * 0.11) + vec2f(s, s * 1.3));
+  let side = 0.55 + 0.45 * smoothstep(1.2, 8.0, abs(xz.x));
+  return r.x * (0.35 + 1.55 * mass * mass) * 2.7 * side + r.y * 0.75;
+}
+
 // ── sky ──────────────────────────────────────────────────────────────────
 fn skyColor(rd: vec3f, sunDir: vec3f, sunCol: vec3f, keyCol: vec3f, quiet: f32) -> vec3f {
   let up = max(rd.y, 0.0);
@@ -195,20 +205,27 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
   let quiet  = u.extra[0].w;
 
   // ── camera: glued to the history — one row per row-append ─────────────
+  // Altitude rides the LOW-FREQUENCY terrain mass averaged over a long
+  // window ahead (≈1.5 s of flight), so the aircraft glides over ridge
+  // spikes instead of tracking every bump; one near full-detail probe
+  // only prevents actual clipping through a freak spike.
   let head = u._r1;
   let camZ = (head - HORIZON_ROWS) * ROW_SPACING;
-  let wx   = sin(camZ * 0.10 + u.scene_seed) * 1.8 + u.drift_x * 1.6;
-  let g0 = terrainH(vec2f(wx, camZ));
-  let g1 = terrainH(vec2f(wx, camZ + 2.2));
-  let g2 = terrainH(vec2f(wx, camZ + 4.6));
-  let camY = max(max(g0, g1), g2) + 1.55 + sin(u.time * 0.47) * 0.12;
+  let wx   = sin(camZ * 0.055 + u.scene_seed) * 1.1 + u.drift_x * 1.2;
+  var gsum = 0.0;
+  for (var k = 0; k <= 5; k++) {
+    gsum += terrainLow(vec2f(wx, camZ + f32(k) * 1.7));
+  }
+  let glide  = gsum / 6.0 + 2.35 + sin(u.time * 0.31) * 0.10;
+  let safety = terrainH(vec2f(wx, camZ + 0.9)) + 0.55;
+  let camY   = max(glide, safety);
   var ro = vec3f(wx, camY, camZ);
   // eruption shockwave shakes the airframe
   let shake = u.extra[0].z;
   ro += vec3f(sin(u.time * 61.0), cos(u.time * 53.0), 0.0) * shake * 0.10;
 
   // forward look, slight down pitch, bank into the weave
-  let weaveD = cos(camZ * 0.10 + u.scene_seed) * 0.18;
+  let weaveD = cos(camZ * 0.055 + u.scene_seed) * 0.11;
   let fwd = normalize(vec3f(weaveD * 0.9, -0.10, 1.0));
   var rt  = normalize(cross(vec3f(0.0, 1.0, 0.0), fwd));
   var upv = cross(fwd, rt);
@@ -266,7 +283,14 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
 
     let dif = max(dot(n, sunDir), 0.0);
     let amb = (n.y * 0.5 + 0.5) * (keyCol + vec3f(0.05, 0.07, 0.11)) * 0.45;
-    col = alb * (sunCol * dif * 1.55 + amb + vec3f(0.018)) * beat;
+    // rim/backlight: ridges silhouetted against the sun catch a hot edge —
+    // this is what makes the relief read as cinematic instead of flat
+    let rim = pow(1.0 - max(dot(n, -rd), 0.0), 3.0)
+            * pow(max(dot(rd, sunDir), 0.0), 3.0);
+    // valleys sink into darkness, peaks take the light
+    let hAo = clamp(p.y * 0.20 + 0.42, 0.42, 1.0);
+    col = alb * (sunCol * dif * 1.75 + amb + vec3f(0.016)) * hAo * beat;
+    col += sunCol * rim * 0.85;
     // high peaks catch extra light — they should read from far away
     col += vec3f(0.42, 0.48, 0.62) * snow * smoothstep(snowLine + 0.6, snowLine + 1.8, p.y) * 0.5;
 
