@@ -635,6 +635,20 @@
       width: 240px;
     }
     #fx-panel.hidden { display: none; }
+    #fx-dials {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    #fx-dials .tune-label {
+      font-size: 0.55rem;
+      width: 58px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #fx-dials input[type=range] { min-width: 0; }
+    #fx-dials .tune-val { flex-shrink: 0; }
     #glass-panel {
       position: fixed;
       top: 52px;

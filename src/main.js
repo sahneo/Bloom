@@ -549,6 +549,8 @@ const midi     = new MIDIHandler({
     harmony.noteOn(pitch, velocity);
     ripples.spawn(pitch);
     lastMidiMs = performance.now();
+    // universal impulse: every mode answers a played note, no mapping needed
+    params.zoomPunch = Math.max(params.zoomPunch ?? 0, (velocity / 127) * 0.25);
   },
   onNoteOff: (pitch) => harmony.noteOff(pitch),
   onCC:      (cc, value) => handleMidiCC(cc, value),
@@ -791,13 +793,17 @@ async function init() {
   }
   window.__setMode = setMode;   // tests + AutoVJ preset rotation
 
-  // CYMATICS: tap the plate — strike position in canvas UV (y down)
+  // Tap the canvas: CYMATICS gets a physical plate strike; every other
+  // mode gets a light universal punch so a tap always answers back
   canvas.addEventListener('pointerdown', (e) => {
-    if (currentMode !== 'cymatics') return;
-    const r = canvas.getBoundingClientRect();
-    params.cymTapX = (e.clientX - r.left) / r.width;
-    params.cymTapY = (e.clientY - r.top) / r.height;
-    params.cymTapN++;
+    if (currentMode === 'cymatics') {
+      const r = canvas.getBoundingClientRect();
+      params.cymTapX = (e.clientX - r.left) / r.width;
+      params.cymTapY = (e.clientY - r.top) / r.height;
+      params.cymTapN++;
+    } else {
+      params.zoomPunch = Math.max(params.zoomPunch ?? 0, 0.35);
+    }
   });
 
   // Cinematic switch: 'fade' dips through black (phrase boundaries, manual
@@ -1041,6 +1047,9 @@ async function init() {
   });
 
   // Gesture control: webcam hand steers the composition (Motion Lab style)
+  const clampNum = (v, a, b) => Math.min(Math.max(v, a), b);
+  let _gestTime  = 1;   // fist clench slows the field clock
+  let _gestPulse = 0;   // fist-release shockwave envelope
   const gesture    = new GestureControl();
   const btnCam     = document.getElementById('btn-cam');
   const camPreview = document.getElementById('cam-preview');
@@ -1341,19 +1350,35 @@ async function init() {
                    + Math.max(0, (drift.scale - 1.05)) * 0.30;
     params.camRot  = drift.rot * 0.35 + _kaleidoSpin;
 
-    // Gesture: hand pans the composition, pinch zooms, fast swipe pops
+    // Gesture vocabulary: one hand pans + pinch zooms; two hands spread to
+    // zoom and tilt to rotate; a held fist slows time to a crawl and
+    // snapping it open fires a shockwave (every mode's drop reaction).
+    _gestTime = 1;
     if (gesture.active) {
       gesture.update(dtS);
       const g = gesture.present;
-      params.driftX  += (gesture.x - 0.5) * 0.9 * g;
-      params.driftY  += (0.5 - gesture.y) * 0.7 * g;
-      params.camZoom += gesture.pinch * 0.45 * g;
+      params.driftX += (gesture.x - 0.5) * 0.9 * g;
+      params.driftY += (0.5 - gesture.y) * 0.7 * g;
+      if (gesture.hands >= 2) {
+        params.camZoom += clampNum((gesture.spread - 0.38) * 1.6, -0.3, 0.7) * g;
+        params.camRot  += gesture.angle * 0.7 * g;
+      } else {
+        params.camZoom += gesture.pinch * 0.45 * g;
+      }
+      _gestTime = 1 - gesture.grip * 0.8 * g;
+      if (gesture.releaseFlag) {
+        gesture.releaseFlag = false;
+        _gestPulse = 1;
+        params.dropFlash = Math.max(params.dropFlash ?? 0, 0.6);
+      }
       if (gesture.vel > 1.5 && g > 0.5)
         params.zoomPunch = Math.max(params.zoomPunch ?? 0, Math.min(gesture.vel * 0.18, 0.6));
       camDot.style.left = (gesture.x * 100) + '%';
       camDot.style.top  = (gesture.y * 100) + '%';
       camDot.style.opacity = g > 0.3 ? 1 : 0;
     }
+    _gestPulse *= Math.exp(-dtS * 2.2);
+    if (_gestPulse > 0.01) params.dropPulse = Math.max(params.dropPulse, _gestPulse);
 
     // Post-chain inputs: nebula/grain clock, sub-bass breathing, echo steps
     // (scene picks a per-frame step at 60 fps; correct it for real frame time)
@@ -1378,7 +1403,7 @@ async function init() {
 
     // Warped clock: tension accelerates all field motion, monotonic so the
     // field phase never jumps when tension eases off
-    fieldMs += dtS * 1000 * (1 + st.tension * 0.6);
+    fieldMs += dtS * 1000 * (1 + st.tension * 0.6) * _gestTime;
     // A preset throwing once must not kill the whole animation loop
     try {
       renderer.render(fieldMs, bands, params);
