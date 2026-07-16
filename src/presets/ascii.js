@@ -67,9 +67,17 @@ export class AsciiPreset {
     this._flickerT    = 0;
     this._flickerSeed = 0;
 
+    // Webcam ASCII mirror (HANDS gesture mode)
+    this.camTex   = null;
+    this._camW    = 0;
+    this._camH    = 0;
+    this.mirror   = 0;      // eased 0→1 blend into the mirror
+    this._invEnv  = 0;      // kick-locked negative flash envelope
+    this._prevKickM = 0;
+
     this._glyphCount = RAMP.length;
     this._atlasRows  = Math.ceil(RAMP.length / ATLAS_COLS);
-    this._u = new Float32Array(40);
+    this._u = new Float32Array(52);
   }
 
   async init(device, format, canvas) {
@@ -80,7 +88,7 @@ export class AsciiPreset {
     this.silTex   = this._uploadTexture(device, buildSilhouetteAtlas());
 
     this.uniformBuffer = device.createBuffer({
-      size:  160,
+      size:  208,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
@@ -89,29 +97,25 @@ export class AsciiPreset {
       addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge',
     });
 
+    // 1×1 placeholder until the webcam is live (HANDS mode)
+    this.camTex = this._makeCamTex(1, 1);
+    this._camW = 1; this._camH = 1;
+
     const module = device.createShaderModule({ label: 'ascii', code: shaderSource });
 
-    const bgl = device.createBindGroupLayout({
+    this._bgl = device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer:  { type: 'uniform' } },
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {} },
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
         { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: {} },
       ],
     });
-
-    this.bindGroup = device.createBindGroup({
-      layout: bgl,
-      entries: [
-        { binding: 0, resource: { buffer: this.uniformBuffer } },
-        { binding: 1, resource: this.glyphTex.createView() },
-        { binding: 2, resource: this.silTex.createView() },
-        { binding: 3, resource: this.sampler },
-      ],
-    });
+    this._rebind();
 
     this.pipeline = device.createRenderPipeline({
-      layout: device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
+      layout: device.createPipelineLayout({ bindGroupLayouts: [this._bgl] }),
       vertex:   { module, entryPoint: 'vs_main' },
       fragment: { module, entryPoint: 'fs_main', targets: [{ format }] },
       primitive: { topology: 'triangle-list' },
@@ -130,6 +134,46 @@ export class AsciiPreset {
       this.seedA = Math.random() * 100;
     };
     window.addEventListener('keydown', this._onKey);
+  }
+
+  _makeCamTex(w, h) {
+    return this.device.createTexture({
+      size:   [w, h],
+      format: 'rgba8unorm',
+      usage:  GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST |
+              GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+  }
+
+  _rebind() {
+    this.bindGroup = this.device.createBindGroup({
+      layout: this._bgl,
+      entries: [
+        { binding: 0, resource: { buffer: this.uniformBuffer } },
+        { binding: 1, resource: this.glyphTex.createView() },
+        { binding: 2, resource: this.silTex.createView() },
+        { binding: 3, resource: this.sampler },
+        { binding: 4, resource: this.camTex.createView() },
+      ],
+    });
+  }
+
+  // Per-frame webcam upload — same safe pattern as dither.js: Chrome can
+  // momentarily drop the video's GPU frame, one missed copy must never
+  // kill the render loop.
+  _updateCam(video) {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return;
+    if (vw !== this._camW || vh !== this._camH) {
+      this.camTex?.destroy();
+      this.camTex = this._makeCamTex(vw, vh);
+      this._camW = vw; this._camH = vh;
+      this._rebind();
+    }
+    try {
+      this.device.queue.copyExternalImageToTexture(
+        { source: video }, { texture: this.camTex }, [vw, vh]);
+    } catch (_) { /* keep last frame */ }
   }
 
   _uploadTexture(device, sourceCanvas) {
@@ -283,6 +327,20 @@ export class AsciiPreset {
 
     this._director(s, dt);
 
+    // ── Webcam ASCII mirror (HANDS mode + live camera) ────────────────
+    const video = params.camVideo;
+    const camOn = params.gestMode === 2 && video && video.readyState >= 2
+               && video.videoWidth > 0;
+    // eased blend in/out so the mirror fades over the scenes, no hard pop
+    this.mirror += ((camOn ? 1 : 0) - this.mirror) * (1 - Math.exp(-dt * 4));
+    if (!camOn && this.mirror < 0.004) this.mirror = 0;
+    if (camOn) this._updateCam(video);
+    // occasional negative flash on hard kicks — reads as a strobe accent
+    if (this.mirror > 0.5 && s.kick > 0.55 && this._prevKickM <= 0.55
+        && Math.random() < 0.3) this._invEnv = 1;
+    this._prevKickM = s.kick;
+    this._invEnv *= Math.exp(-dt * 7);
+
     const w = this.canvas.width, h = this.canvas.height;
     const cellW = Math.max(7, Math.round(w / 160));
     const cellH = cellW * 2;
@@ -332,6 +390,21 @@ export class AsciiPreset {
     // anim2.yzw carries the user-picked glyph colour (default white)
     const col = params.asciiColor ?? [1, 1, 1];
     u[36] = walkFrame;   u[37] = col[0];       u[38] = col[1];          u[39] = col[2];
+    // cam: mirror blend, camera aspect, kick-invert env
+    u[40] = this.mirror;
+    u[41] = this._camH > 0 ? this._camW / this._camH : 4 / 3;
+    u[42] = this._invEnv;
+    u[43] = 0;
+    // hands (canvas UV, x pre-mirrored by gesture.js): x, y, grip, present
+    const hh = params.hands?.h;
+    for (let i = 0; i < 2; i++) {
+      const hd = hh?.[i];
+      const on = hd?.present ? 1 : 0;
+      u[44 + i * 4] = on ? hd.x : -10;
+      u[45 + i * 4] = on ? hd.y : -10;
+      u[46 + i * 4] = on ? (hd.grip ?? 0) : 0;
+      u[47 + i * 4] = on;
+    }
     device.queue.writeBuffer(this.uniformBuffer, 0, u);
   }
 
@@ -357,6 +430,7 @@ export class AsciiPreset {
     this.uniformBuffer?.destroy();
     this.glyphTex?.destroy();
     this.silTex?.destroy();
+    this.camTex?.destroy();
   }
 }
 

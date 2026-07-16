@@ -14,12 +14,16 @@ struct Uniforms {
   dissonance: f32,  tonality: f32, seed_b: f32,      beat_conf: f32,
   anim: vec4f,                         // walker_x, bird_x, bird_y, bird_frame (<0 = hidden)
   anim2: vec4f,                        // walker_frame, _, _, _
+  cam: vec4f,                          // mirror blend, cam aspect (w/h), kick-invert env, _
+  hand0: vec4f,                        // x, y (canvas UV, y down, x pre-mirrored), grip, present
+  hand1: vec4f,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var glyph_tex: texture_2d<f32>;
 @group(0) @binding(2) var sil_tex:   texture_2d<f32>;
 @group(0) @binding(3) var samp:      sampler;
+@group(0) @binding(4) var cam_tex:   texture_2d<f32>;
 
 // Glyph cell size in the atlas, must match GLYPH_W/GLYPH_H in ascii.js
 const GLYPH_PX = vec2f(16.0, 32.0);
@@ -468,6 +472,25 @@ fn scene_density(id: i32, p: vec2f, t: f32, seed: f32) -> f32 {
   return scene_acid(p, t, seed);
 }
 
+// ── Webcam ASCII mirror (HANDS gesture mode) ────────────────────────
+// Cover-fit the camera onto the canvas and flip u so the user sees
+// himself as in a mirror (camVideo is unmirrored).
+
+fn cam_uv(suv: vec2f) -> vec2f {
+  let a = u.res_x / u.res_y;           // canvas aspect
+  let c = max(u.cam.y, 0.001);         // camera aspect
+  var q = suv - vec2f(0.5);
+  if (a > c) { q.y *= c / a; } else { q.x *= a / c; }
+  q += vec2f(0.5);
+  q.x = 1.0 - q.x;                     // mirror flip
+  return q;
+}
+
+fn cam_lum(suv: vec2f) -> f32 {
+  let rgb = textureSampleLevel(cam_tex, samp, cam_uv(suv), 0.0).rgb;
+  return dot(rgb, vec3f(0.299, 0.587, 0.114));
+}
+
 // ── Pipeline ─────────────────────────────────────────────────────────
 
 @vertex
@@ -525,10 +548,42 @@ fn fs_main(@builtin(position) frag: vec4f) -> @location(0) vec4f {
 
   density = clamp(density, 0.0, 1.0);
 
+  // ── Webcam mirror takeover (cam.x fades 0→1 when HANDS mode is live) ──
+  var hand_glow = 0.0;
+  if (u.cam.x > 0.001) {
+    let suv = center / res;
+    let px  = cell / res;                        // one grid cell in screen UV
+    var lum = cam_lum(suv);
+    // cheap cross-gradient edge one cell away — outlines shimmer with mids
+    let ex = abs(cam_lum(suv + vec2f(px.x, 0.0)) - cam_lum(suv - vec2f(px.x, 0.0)));
+    let ey = abs(cam_lum(suv + vec2f(0.0, px.y)) - cam_lum(suv - vec2f(0.0, px.y)));
+    let edge = clamp((ex + ey) * 2.0, 0.0, 1.0);
+    // bass pumps contrast + lift so the figure punches with the low end
+    lum = clamp((lum - 0.42) * (1.25 + u.bass * 1.1) + 0.46 + u.bass * 0.10, 0.0, 1.0);
+    var md = clamp(lum + edge * (0.25 + u.mid * 0.45), 0.0, 1.0);
+    // occasional kick-locked negative flash (envelope set in JS)
+    md = mix(md, 1.0 - md, clamp(u.cam.z, 0.0, 1.0) * 0.85);
+    // hands paint light into the field; a fist inverts its local block
+    let asp = vec2f(u.res_x / u.res_y, 1.0);
+    for (var i = 0; i < 2; i++) {
+      var hd = u.hand0;
+      if (i == 1) { hd = u.hand1; }
+      if (hd.w < 0.5) { continue; }
+      let hdist = length((suv - hd.xy) * asp);
+      hand_glow = max(hand_glow, smoothstep(0.30, 0.02, hdist));
+      if (hd.z > 0.6) {
+        md = mix(md, 1.0 - md, smoothstep(0.20, 0.05, hdist));
+      }
+    }
+    md = clamp(md + hand_glow * 0.55, 0.0, 1.0);
+    density = mix(density, md, u.cam.x);
+  }
+
   // Soft global lift on kick — no spatial pattern, just a breath of brightness.
   // With a confident beat, a predictive flash lands exactly ON the beat.
   let beat_flash = u.beat_conf * 0.14 * pow(max(0.0, 1.0 - fract(u.beat_t) * 2.5), 2.0);
-  var bright = 0.5 + 0.5 * density + u.pulse * 0.25 + u.kick * 0.3 + beat_flash + torn * 0.2;
+  var bright = 0.5 + 0.5 * density + u.pulse * 0.25 + u.kick * 0.3 + beat_flash + torn * 0.2
+             + hand_glow * u.cam.x * 0.45;
 
   // Glyph index + high-band flicker
   var idx = i32(density * (u.glyph_count - 1.0) + 0.5);
