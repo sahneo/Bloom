@@ -15,6 +15,11 @@ const SPLIT_S      = 6.0;    // how long a drop keeps the flock in two bodies
 const SPLIT_MERGE  = 1.5;    // last N seconds of the split ramp back together
 const SPLIT_SEP    = 0.85;   // how far apart the two targets fly
 
+// HANDS gesture mode — hand-as-predator. Must match swarm.wgsl's camera.
+const FOCAL   = 1.55;        // pinhole focal length (see vs_bird)
+const HAND_Z  = 2.25;        // depth at which the hand ray meets the flock
+const HAND_EXTRA = 12;       // hand data starts at extra[3] (float index 12)
+
 export class SwarmPreset {
   constructor() {
     this.frameCount = 0;
@@ -39,7 +44,13 @@ export class SwarmPreset {
     this._prevDrop  = 0;
     this._kickCd    = 0;
 
-    this._extra = new Float32Array(12);
+    this._extra = new Float32Array(40);   // [0..11] music, [12..39] hands
+
+    // per-hand-slot predator state (slot identity is stable upstream)
+    this._hands = [
+      { init: false, x: 0.5, y: 0.5, vx: 0, vy: 0, strike: 0, grip: 0, burst: 0, fisted: false },
+      { init: false, x: 0.5, y: 0.5, vx: 0, vy: 0, strike: 0, grip: 0, burst: 0, fisted: false },
+    ];
   }
 
   async init(device, format, canvas) {
@@ -193,6 +204,84 @@ export class SwarmPreset {
     this._snare *= Math.exp(-dt * 7);
   }
 
+  // ── hands → predators ─────────────────────────────────────────────────
+  // Converts each present hand (canvas UV) into a world-space view ray at
+  // flock depth and derives three envelopes per slot: strike (fast palm ⇒
+  // panic scatter), grip (fist ⇒ grab vortex) and burst (clench moment ⇒
+  // outward ring). Writes extra[3..9]; all zero unless in HANDS mode, so
+  // the compute shader's hand block is inert and behaviour is unchanged.
+  _updateHands(dt, params) {
+    const e = this._extra;
+    e.fill(0, HAND_EXTRA);                      // inert by default
+
+    const active = params.gestMode === 2 && params.hands;
+    const asp    = this.canvas.width / Math.max(this.canvas.height, 1);
+    // invert the render camera: it pans by drift and rolls by driftRot*0.2
+    const roll = (params.driftRot ?? 0) * 0.2;
+    const cr = Math.cos(roll), sr = Math.sin(roll);
+    const offX = (params.driftX ?? 0) * 0.22;
+    const offY = (params.driftY ?? 0) * 0.15;
+
+    for (let s = 0; s < 2; s++) {
+      const st = this._hands[s];
+      const h  = active ? params.hands.h?.[s] : null;
+      const pres = h?.present ?? 0;
+
+      if (!h || pres < 0.02) {                  // slot empty → decay + reset
+        st.init   = false;
+        st.strike *= Math.exp(-dt * 3.0);
+        st.burst  *= Math.exp(-dt * 3.5);
+        st.grip   *= Math.exp(-dt * 6.0);
+        st.fisted  = false;
+        continue;
+      }
+
+      if (!st.init) {                           // fresh appearance: no fake velocity
+        st.x = h.x; st.y = h.y; st.vx = 0; st.vy = 0; st.init = true;
+      }
+      // palm velocity in UV/s (EMA ~80 ms so a strike reads within a frame or two)
+      const kv = 1 - Math.exp(-dt / 0.08);
+      st.vx += ((h.x - st.x) / Math.max(dt, 1e-3) - st.vx) * kv;
+      st.vy += ((h.y - st.y) / Math.max(dt, 1e-3) - st.vy) * kv;
+      st.x = h.x; st.y = h.y;
+
+      // strike envelope: fast palm ⇒ panic (0.45 UV/s onset, saturates ~1.4)
+      const spd = Math.max(Math.hypot(st.vx, st.vy), params.hands.vel ?? 0);
+      const t   = Math.min(Math.max((spd - 0.45) / 0.95, 0), 1);
+      st.strike = Math.max(st.strike * Math.exp(-dt * 3.0), t * t * (3 - 2 * t));
+
+      // grip smoothing + one burst impulse per clench
+      st.grip += ((h.grip ?? 0) - st.grip) * (1 - Math.exp(-dt / 0.12));
+      if (st.grip > 0.65 && !st.fisted) { st.burst = 1; st.fisted = true; }
+      if (st.grip < 0.45) { st.fisted = false; }
+      st.burst *= Math.exp(-dt * 3.5);
+
+      // UV → world view ray (undo mirror-free UV → NDC, aspect, roll, drift)
+      const ndcx = h.x * 2 - 1, ndcy = 1 - h.y * 2;    // UV y is down
+      const dx = ndcx * asp / FOCAL, dy = ndcy / FOCAL;
+      let wx = cr * dx + sr * dy, wy = -sr * dx + cr * dy, wz = 1;
+      const dl = Math.hypot(wx, wy, wz);
+      wx /= dl; wy /= dl; wz /= dl;
+      const rt = HAND_Z / wz;                          // ray point at flock depth
+
+      // palm velocity in world units at flock depth (for strike direction)
+      const sx = 2 * asp * HAND_Z / FOCAL, sy = -2 * HAND_Z / FOCAL;
+      const wvx = cr * (st.vx * sx) + sr * (st.vy * sy);
+      const wvy = -sr * (st.vx * sx) + cr * (st.vy * sy);
+
+      const base = HAND_EXTRA + s * 12;                // extra[3 + s*3]
+      e[base]      = offX + wx * rt;
+      e[base + 1]  = offY + wy * rt;
+      e[base + 2]  = wz * rt;
+      e[base + 3]  = pres;
+      e[base + 4]  = wx; e[base + 5] = wy; e[base + 6] = wz;
+      e[base + 7]  = st.grip;
+      e[base + 8]  = wvx; e[base + 9] = wvy; e[base + 10] = 0;
+      e[base + 11] = st.strike;
+      e[36 + s]    = st.burst;                         // extra[9].x / .y
+    }
+  }
+
   tick(device, bands, timeMs, deltaMs, params) {
     this.frameCount++;
     this._params = params;
@@ -200,6 +289,7 @@ export class SwarmPreset {
 
     const dt = Math.min(deltaMs * 0.001, 0.05);
     this._updateMusic(bands, dt, params);
+    this._updateHands(dt, params);
 
     const { gain } = PostFX.trailFactors(params, deltaMs);
     const u = buildUniforms(bands, timeMs, deltaMs, params, this.canvas, this.frameCount, gain);

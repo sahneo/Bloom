@@ -11,6 +11,16 @@
 //   _r3 = snare align surge
 //   extra[0].xyz = target A   extra[1].xyz = target B  extra[1].w = split
 //   extra[2].xyz = strike point   extra[2].w = strike age (s)
+//
+// HANDS gesture mode — each webcam hand is a live predator (falcon) in the
+// flock. Per hand slot s in {0,1}, base = 3 + s*3:
+//   extra[base+0].xyz = world point on the hand's view ray at flock depth
+//   extra[base+0].w   = presence gate 0..1 (0 ⇒ slot fully inert)
+//   extra[base+1].xyz = view-ray direction (unit)   .w = grip (fist) 0..1
+//   extra[base+2].xyz = hand world velocity          .w = strike envelope
+//   extra[9].x / .y   = fist-clench burst impulse for slot 0 / 1
+// All hand slots are zero unless the preset is in HANDS mode, so this block
+// costs one branch per slot and the flock behaves exactly as before.
 
 struct Uniforms {
   time:       f32, sub_bass:    f32, bass:      f32, mid:       f32,
@@ -136,11 +146,64 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
     f += jdir * u._r1 * 7.0 * fall;
   }
 
+  // ── hand predators (HANDS mode): a hand is a falcon in the flock ──────
+  // Distance is measured to the hand's VIEW RAY (a screen point covers all
+  // depths), so the reaction reads exactly where the hand is on screen.
+  // Also post-clamp: fleeing a predator overrides aerodynamics.
+  var fear = 0.0;
+  for (var hs = 0u; hs < 2u; hs++) {
+    let hp   = u.extra[3u + hs * 3u];             // ray point, w = presence
+    let pres = hp.w;
+    if (pres < 0.003) { continue; }
+    let hd   = u.extra[4u + hs * 3u];             // ray dir,   w = grip
+    let hv   = u.extra[5u + hs * 3u];             // hand vel,  w = strike env
+
+    let rel    = pos - hp.xyz;
+    let radial = rel - hd.xyz * dot(rel, hd.xyz); // offset ⊥ to the view ray
+    let rl     = length(radial);
+    let rdir   = radial / max(rl, 0.03);
+
+    // open hand hovering: soft exclusion — the flock keeps a respectful
+    // distance and slides around the hand like around a drifting hawk shadow
+    let hover = exp(-rl * rl * 12.0) * pres;
+    f += rdir * hover * 2.2;
+    let slide = vel - rdir * dot(vel, rdir);      // keep moving, but sideways
+    f += safeN(slide) * hover * 1.6;
+
+    // fast hand = STRIKE: panic scatter away from the ray, biased along the
+    // hand's direction of travel — the stoop tears a wake through the flock
+    let strike = hv.w * pres;
+    if (strike > 0.01) {
+      let fall = exp(-rl * 1.5);
+      let hdir = hv.xyz / max(length(hv.xyz), 1e-3);
+      f += (rdir * 13.0 + hdir * 11.0) * strike * fall;
+      f += jdir * strike * 6.0 * fall;            // panic breaks formation
+      fear = max(fear, strike * fall);
+    }
+
+    // fist = the predator grabs: hard exclusion core + tangential swirl —
+    // boids caught near the fist spiral outward in a tight panic vortex
+    let grip = hd.w * pres;
+    if (grip > 0.02) {
+      let fall = exp(-rl * rl * 12.0);
+      f += (rdir * 8.0 + cross(hd.xyz, rdir) * 9.0) * grip * fall;
+      fear = max(fear, grip * fall * 0.6);
+    }
+    // clench moment: one burst ring blown outward from the grab point
+    let burst = select(u.extra[9].y, u.extra[9].x, hs == 0u) * pres;
+    if (burst > 0.01) {
+      let fall = exp(-rl * 1.8);
+      f += (rdir * 18.0 + jdir * 7.0) * burst * fall;
+      fear = max(fear, burst * fall);
+    }
+  }
+
   // ── integrate ──────────────────────────────────────────────────────────
   vel += f * dt;
   vel *= exp(-dt * 0.6);                     // light air drag
   let spd  = length(vel);
-  let vmax = (0.55 + restless * 0.40) * (0.80 + 0.40 * hash) + u._r1 * 1.4;
+  // frightened birds surge: fear locally raises the speed ceiling
+  let vmax = (0.55 + restless * 0.40) * (0.80 + 0.40 * hash) + u._r1 * 1.4 + fear * 1.6;
   let vmin = 0.15;
   var nspd = spd;
   if (spd > vmax) { nspd = mix(spd, vmax, 1.0 - exp(-dt * 5.0)); }  // soft brake
