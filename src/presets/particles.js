@@ -18,6 +18,11 @@ export class ParticlesPreset {
     this.frameCount      = 0;
     this._params  = null;
     this._dtMs    = 16.67;
+    // Merged ripple + hand-gesture uniform region (written at RIPPLE_OFFSET).
+    // Hand data rides in the .w lanes ripples never use — see the packing
+    // comment in particles_compute.wgsl. Ripple ages default to -1 (inactive).
+    this._extra = new Float32Array(64);
+    for (let i = 0; i < 8; i++) this._extra[i * 4 + 2] = -1;
   }
 
   async init(device, format, canvas) {
@@ -100,8 +105,23 @@ export class ParticlesPreset {
     const { gain } = PostFX.trailFactors(params, deltaMs);
     const u = buildUniforms(bands, timeMs, deltaMs, params, this.canvas, this.frameCount, gain);
     device.queue.writeBuffer(this.uniformBuffer, 0, u);
-    if (params.rippleData) {
-      device.queue.writeBuffer(this.uniformBuffer, RIPPLE_OFFSET, params.rippleData);
+    // Ripple data + hand-gesture data share the extra uniform region: ripples
+    // own the .xyz lanes, hands the .w lanes (see particles_compute.wgsl).
+    const hands = (params.gestMode === 2 && params.hands) ? params.hands : null;
+    if (params.rippleData || hands) {
+      if (params.rippleData) this._extra.set(params.rippleData);
+      const X = this._extra;
+      for (let s = 0; s < 2; s++) {
+        const h    = hands?.h?.[s];
+        const on   = h && (h.present ?? 0) > 0;
+        const base = s === 0 ? 0 : 32;         // hand0 → pos_age .w, hand1 → color .w
+        X[base + 3]  = on ? h.x : 0;
+        X[base + 7]  = on ? h.y : 0;
+        X[base + 11] = on ? h.grip : 0;
+        X[base + 15] = on ? h.pinch : 0;
+        X[base + 19] = on ? h.present : 0;
+      }
+      device.queue.writeBuffer(this.uniformBuffer, RIPPLE_OFFSET, this._extra);
     }
 
     const enc  = device.createCommandEncoder();

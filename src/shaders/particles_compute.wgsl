@@ -21,9 +21,18 @@ struct Uniforms {
   drift_x:    f32, drift_y:     f32, scene_seed: f32, palette_mode: f32,
   // row 10 — timbre sharpness (0 sine-soft → 1 saw-bright) from spectral centroid
   sharpness:  f32, _r1:         f32, _r2:       f32, _r3:        f32,
-  // rows 11-18: ripple data — (x, y, age_sec, _) per slot; age<0 = inactive
+  // rows 11-18: ripple data — (x, y, age_sec, w) per slot; age<0 = inactive
+  // rows 19-26: ripple colors — (r, g, b, w)
+  //
+  // HAND PACKING (gesture HANDS mode): ripples never use the .w lane of either
+  // array (ripples.js always writes 0 there), so those 16 free floats carry
+  // per-hand data written by particles.js:
+  //   ripple_pos_age[0..4].w = hand0: x, y, grip, pinch, present
+  //   ripple_color [0..4].w  = hand1: x, y, grip, pinch, present
+  // x,y are canvas UV (0..1, y down); grip 0=open palm → 1=fist; present is
+  // the smoothed 0..1 gate — all hand forces scale by it, and it is 0 whenever
+  // gesture mode is off (zero regression: buffer defaults to 0 too).
   ripple_pos_age: array<vec4f, 8>,
-  // rows 19-26: ripple colors — (r, g, b, _)
   ripple_color:   array<vec4f, 8>,
 }
 
@@ -339,6 +348,71 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
     let env    = exp(-r_age * 2.0) * max(0.0, 1.0 - r_age / 2.5);
     let wave   = exp(-dring * dring) * env;
     f += normalize(to_p) * wave * 20.0;
+  }
+
+  // ── HAND FORCE FIELDS (gesture HANDS mode) ─────────────────────────
+  // Data packed in the unused .w lanes of the ripple arrays (see header).
+  // Open palm: Gaussian repulsion hole + swirl so particles stream around
+  // the hand like water around a stone. Fist: attraction vortex with a soft
+  // repulsive core — particles orbit into a glowing accretion disk. Grip
+  // morphs continuously between the two. Pinch: the hand becomes an emitter
+  // (respawn handled below). Everything scales by the slot's smoothed
+  // `present`, so hands fade in/out instead of popping.
+  for (var hi = 0u; hi < 2u; hi++) {
+    var hx: f32; var hyv: f32; var grip: f32; var pinch: f32; var pres: f32;
+    if (hi == 0u) {
+      hx    = u.ripple_pos_age[0].w;
+      hyv   = u.ripple_pos_age[1].w;
+      grip  = u.ripple_pos_age[2].w;
+      pinch = u.ripple_pos_age[3].w;
+      pres  = u.ripple_pos_age[4].w;
+    } else {
+      hx    = u.ripple_color[0].w;
+      hyv   = u.ripple_color[1].w;
+      grip  = u.ripple_color[2].w;
+      pinch = u.ripple_color[3].w;
+      pres  = u.ripple_color[4].w;
+    }
+    if (pres < 0.02) { continue; }
+
+    // Canvas UV (y down) → particle space (x∈[-asp,asp], y∈[-1,1], y up)
+    let hp   = vec2f((hx * 2.0 - 1.0) * asp, 1.0 - 2.0 * hyv);
+    let hd   = p.pos - hp;
+    let dist = length(hd) + 0.0001;
+    let dir  = hd / dist;
+    let spin = select(1.0, -1.0, hi == 1u);       // hands swirl in opposite directions
+    let tang = vec2f(-dir.y, dir.x) * spin;
+
+    // Pinch damps the palm/fist field so the emitter jet reads clean
+    let field_w = pres * (1.0 - pinch * 0.6);
+    let open_w  = (1.0 - grip) * field_w;
+    let fist_w  = grip * field_w;
+
+    // OPEN PALM — a clear hole opens where the hand is, flow curls around it
+    let g_hole = exp(-dist * dist * 8.0);          // hole core, radius ≈ 0.35
+    let g_flow = exp(-dist * dist * 2.2);          // wider swirl envelope
+    f += dir  * open_w * 60.0 * g_hole;
+    f += tang * open_w * 20.0 * g_flow;
+
+    // FIST — black-hole vortex: 1/r pull + orbit, soft core stops full collapse.
+    // Tangential uses a Gaussian envelope (not 1/r) so centrifugal fling can't
+    // throw the disk out to the screen edge — orbits stay tight around the fist.
+    f += -dir * fist_w * 30.0 / (dist + 0.15);
+    f +=  tang * fist_w * 26.0 * exp(-dist * dist * 2.5);
+    f +=  dir * fist_w * 140.0 * exp(-dist * dist * 80.0);
+
+    // PINCH — emitter: respawn a fraction of particles at the hand each frame
+    // with an outward jet, so the hand literally paints particle bursts
+    let emit = pinch * pres;
+    if (emit > 0.35 && rnd(seed ^ (2477u + hi * 7919u)) < emit * 0.012) {
+      var np   = respawn(idx, seed ^ (hi * 131u + 17u));
+      let ang  = rnd(seed ^ 3187u) * 6.28318;
+      let jdir = vec2f(cos(ang), sin(ang));
+      np.pos = hp + jdir * rnd(seed ^ 411u) * 0.02;
+      np.vel = jdir * (0.8 + rnd(seed ^ 733u) * 2.2) * emit;
+      particles[idx] = np;
+      return;
+    }
   }
 
   // Beat-synced breath: the whole field exhales outward exactly on the
