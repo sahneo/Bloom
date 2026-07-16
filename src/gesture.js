@@ -29,6 +29,16 @@ export class GestureControl {
     this.angle  = 0;       // two-hand line tilt, radians (x-sorted, ±π/2)
     this.vel = 0;          // palm speed, screen-units/s, smoothed
     this.releaseFlag = false;  // one-shot: fist snapped open — consumer clears
+    // per-hand smoothed slots for field mode (presets read these):
+    // {x, y, grip, pinch, present} — slot order kept stable across frames
+    this.hlist = [
+      { x: 0.5, y: 0.5, grip: 0, pinch: 0, present: 0 },
+      { x: 0.5, y: 0.5, grip: 0, pinch: 0, present: 0 },
+    ];
+    this._slotRaw = [
+      { x: 0.5, y: 0.5, grip: 0, pinch: 0, present: 0 },
+      { x: 0.5, y: 0.5, grip: 0, pinch: 0, present: 0 },
+    ];
     this._raw = { x: 0.5, y: 0.5 };
     this._pinchRaw = 0; this._gripRaw = 0; this._presentRaw = 0;
     this._spreadRaw = 0.4; this._angleRaw = 0;
@@ -91,6 +101,25 @@ export class GestureControl {
       this.hands = hands.length;
       if (hands.length) {
         const m = hands.map(lm => this._measure(lm));
+        // stable slot assignment: match each measured hand to the nearest
+        // previous slot so left/right don't swap between frames
+        if (m.length >= 2) {
+          const d00 = Math.hypot(m[0].x - this._slotRaw[0].x, m[0].y - this._slotRaw[0].y)
+                    + Math.hypot(m[1].x - this._slotRaw[1].x, m[1].y - this._slotRaw[1].y);
+          const d01 = Math.hypot(m[0].x - this._slotRaw[1].x, m[0].y - this._slotRaw[1].y)
+                    + Math.hypot(m[1].x - this._slotRaw[0].x, m[1].y - this._slotRaw[0].y);
+          const [s0, s1] = d00 <= d01 ? [m[0], m[1]] : [m[1], m[0]];
+          this._slotRaw[0] = { ...s0, present: 1 };
+          this._slotRaw[1] = { ...s1, present: 1 };
+        } else {
+          const d0 = Math.hypot(m[0].x - this._slotRaw[0].x, m[0].y - this._slotRaw[0].y);
+          const d1 = Math.hypot(m[0].x - this._slotRaw[1].x, m[0].y - this._slotRaw[1].y);
+          let keep = 0;
+          if (this._slotRaw[0].present && this._slotRaw[1].present) keep = d0 <= d1 ? 0 : 1;
+          else if (this._slotRaw[1].present) keep = 1;
+          this._slotRaw[keep] = { ...m[0], present: 1 };
+          this._slotRaw[1 - keep].present = 0;
+        }
         let nx, ny;
         if (m.length >= 2) {
           const [a, b] = m[0].x <= m[1].x ? [m[0], m[1]] : [m[1], m[0]];
@@ -118,10 +147,20 @@ export class GestureControl {
         this._presentRaw = 0;
         this._gripRaw = 0;
         this._gripHeldMs = 0;
+        this._slotRaw[0].present = 0;
+        this._slotRaw[1].present = 0;
         this.vel *= 0.8;
       }
     }
     const k = 1 - Math.exp(-dt * 9);
+    for (let i = 0; i < 2; i++) {
+      const s = this._slotRaw[i], h = this.hlist[i];
+      h.x     += (s.x - h.x) * k;
+      h.y     += (s.y - h.y) * k;
+      h.grip  += (s.grip  - h.grip)  * k;
+      h.pinch += (s.pinch - h.pinch) * k;
+      h.present += (s.present - h.present) * (1 - Math.exp(-dt * 5));
+    }
     this.x      += (this._raw.x - this.x) * k;
     this.y      += (this._raw.y - this.y) * k;
     this.pinch  += (this._pinchRaw - this.pinch) * k;

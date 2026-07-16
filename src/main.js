@@ -1054,26 +1054,39 @@ async function init() {
   const btnCam     = document.getElementById('btn-cam');
   const camPreview = document.getElementById('cam-preview');
   const camDot     = document.getElementById('cam-dot');
+  // CAM cycles: off → PAN (gestures steer the camera) → HANDS (hands act
+  // inside the simulation — presets with field support react to palms)
+  let camState = 0;
   btnCam.addEventListener('click', async () => {
-    if (gesture.active) {
+    if (camState === 0) {
+      btnCam.textContent = '...';
+      try {
+        await gesture.start();
+        camPreview.prepend(gesture.video);
+        camPreview.classList.remove('hidden');
+        btnCam.classList.add('active');
+        btnCam.textContent = 'PAN';
+        camState = 1;
+        posthog.capture('gesture_enabled');
+      } catch (e) {
+        console.error('gesture:', e);
+        btnCam.textContent = 'ERR';
+        setTimeout(() => { btnCam.textContent = 'CAM'; }, 1500);
+      }
+    } else if (camState === 1) {
+      camState = 2;
+      btnCam.textContent = 'HANDS';
+      posthog.capture('gesture_field_mode');
+    } else {
+      camState = 0;
       gesture.stop();
+      params.gestMode = 0;
+      params.hands    = null;
+      params.camVideo = null;
       camPreview.querySelector('video')?.remove();
       camPreview.classList.add('hidden');
       btnCam.classList.remove('active');
-      return;
-    }
-    btnCam.textContent = '...';
-    try {
-      await gesture.start();
-      camPreview.prepend(gesture.video);
-      camPreview.classList.remove('hidden');
-      btnCam.classList.add('active');
       btnCam.textContent = 'CAM';
-      posthog.capture('gesture_enabled');
-    } catch (e) {
-      console.error('gesture:', e);
-      btnCam.textContent = 'ERR';
-      setTimeout(() => { btnCam.textContent = 'CAM'; }, 1500);
     }
   });
 
@@ -1350,29 +1363,35 @@ async function init() {
                    + Math.max(0, (drift.scale - 1.05)) * 0.30;
     params.camRot  = drift.rot * 0.35 + _kaleidoSpin;
 
-    // Gesture vocabulary: one hand pans + pinch zooms; two hands spread to
-    // zoom and tilt to rotate; a held fist slows time to a crawl and
-    // snapping it open fires a shockwave (every mode's drop reaction).
+    // Gesture vocabulary. PAN mode: one hand pans + pinch zooms, two hands
+    // spread to zoom / tilt to rotate, fist slows time. HANDS mode: the
+    // camera stays put — palms are handed to the preset (params.hands) as
+    // in-simulation forces. Fist-release shockwave fires in both modes.
     _gestTime = 1;
     if (gesture.active) {
+      params.gestMode = camState;
       gesture.update(dtS);
       const g = gesture.present;
-      params.driftX += (gesture.x - 0.5) * 0.9 * g;
-      params.driftY += (0.5 - gesture.y) * 0.7 * g;
-      if (gesture.hands >= 2) {
-        params.camZoom += clampNum((gesture.spread - 0.38) * 1.6, -0.3, 0.7) * g;
-        params.camRot  += gesture.angle * 0.7 * g;
-      } else {
-        params.camZoom += gesture.pinch * 0.45 * g;
+      params.hands    = { n: gesture.hands, present: g, h: gesture.hlist, vel: gesture.vel };
+      params.camVideo = gesture.video;
+      if (camState === 1) {
+        params.driftX += (gesture.x - 0.5) * 0.9 * g;
+        params.driftY += (0.5 - gesture.y) * 0.7 * g;
+        if (gesture.hands >= 2) {
+          params.camZoom += clampNum((gesture.spread - 0.38) * 1.6, -0.3, 0.7) * g;
+          params.camRot  += gesture.angle * 0.7 * g;
+        } else {
+          params.camZoom += gesture.pinch * 0.45 * g;
+        }
+        _gestTime = 1 - gesture.grip * 0.8 * g;
+        if (gesture.vel > 1.5 && g > 0.5)
+          params.zoomPunch = Math.max(params.zoomPunch ?? 0, Math.min(gesture.vel * 0.18, 0.6));
       }
-      _gestTime = 1 - gesture.grip * 0.8 * g;
       if (gesture.releaseFlag) {
         gesture.releaseFlag = false;
         _gestPulse = 1;
         params.dropFlash = Math.max(params.dropFlash ?? 0, 0.6);
       }
-      if (gesture.vel > 1.5 && g > 0.5)
-        params.zoomPunch = Math.max(params.zoomPunch ?? 0, Math.min(gesture.vel * 0.18, 0.6));
       camDot.style.left = (gesture.x * 100) + '%';
       camDot.style.top  = (gesture.y * 100) + '%';
       camDot.style.opacity = g > 0.3 ? 1 : 0;
