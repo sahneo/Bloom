@@ -3,7 +3,7 @@ import { PostFX, ACCUM_FORMAT } from '../postfx.js';
 import { buildUniforms, UNIFORM_SIZE, RIPPLE_OFFSET } from './uniforms.js';
 
 // GALAXY — deep-space flythrough. The camera drifts forward through a
-// parallax starfield dotted with 12 living star clusters (globular knots
+// parallax starfield dotted with 6 living star clusters (globular knots
 // wrapped in nebula gas). Music drives the space itself:
 //   kick   → the most prominent cluster flares
 //   bass   → nebula cores breathe (inflate + brighten)
@@ -15,11 +15,11 @@ import { buildUniforms, UNIFORM_SIZE, RIPPLE_OFFSET } from './uniforms.js';
 // are no storage buffers and no compute pass (galaxy_compute.wgsl unused).
 
 // must match galaxy.wgsl
-const M         = 12;
+const M         = 6;
 const DEPTH     = 24;
-const N_FIELD   = 150_000;
-const N_CLUSTER = 108_000;
-const N_GAS     = 720;
+const N_FIELD   = 60_000;
+const N_CLUSTER = 54_000;
+const N_GAS     = 360;
 
 export class GalaxyPreset {
   constructor() {
@@ -44,7 +44,7 @@ export class GalaxyPreset {
     this._clusters = [];
     for (let i = 0; i < M; i++) {
       const c = { x: 0, y: 0, z: 0 };
-      this._respawnCluster(c, 1.5 + i * 2.4 + Math.random() * 1.4);
+      this._respawnCluster(c, 2.0 + i * 4.6 + Math.random() * 2.0);
       this._clusters.push(c);
     }
 

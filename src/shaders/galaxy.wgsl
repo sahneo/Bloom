@@ -11,7 +11,7 @@
 //   extra[1] = flySpeed, warp, snareEnv, bassBreath
 //   extra[2] = novaX, novaY, novaZ(world), novaAge
 //   extra[3] = novaStrength, quiet, energy, 0
-//   extra[4+c] (c = 0..11) = clusterX, clusterY, clusterZ(world), flareEnv
+//   extra[4+c] (c = 0..5) = clusterX, clusterY, clusterZ(world), flareEnv
 
 struct Uniforms {
   time:       f32, sub_bass:    f32, bass:      f32, mid:       f32,
@@ -33,9 +33,9 @@ struct Uniforms {
 // ── constants (must match galaxy.js) ─────────────────────────────────────
 const DEPTH:     f32 = 24.0;      // field wrap depth
 const FOCAL:     f32 = 1.15;
-const N_FIELD:   u32 = 150000u;
-const N_CLUSTER: u32 = 108000u;
-const M:         u32 = 12u;       // cluster count
+const N_FIELD:   u32 = 60000u;
+const N_CLUSTER: u32 = 54000u;
+const M:         u32 = 6u;        // cluster count
 
 // ── hashes ────────────────────────────────────────────────────────────────
 fn pcg(v: u32) -> u32 {
@@ -137,13 +137,13 @@ fn fs_bg(in: BGOut) -> @location(0) vec4f {
   let n2 = fbm(p * 3.4 + vec2f(cam.x * 0.03, sd * 0.31));
 
   let neb = hsv2rgb(vec3f(u.key_hue, 0.55, 1.0));
-  var col = vec3f(0.005, 0.007, 0.014)
-    + band * (0.026 + 0.034 * n1) * vec3f(0.45, 0.55, 0.85)
-    + n1 * n1 * neb * 0.030 * (0.45 + glob.z * 0.9)
-    + n2 * n2 * n2 * vec3f(0.75, 0.82, 1.0) * 0.016;
+  var col = vec3f(0.0008, 0.0012, 0.0028)
+    + band * (0.006 + 0.009 * n1) * vec3f(0.45, 0.55, 0.85)
+    + n1 * n1 * neb * 0.008 * (0.45 + glob.z * 0.9)
+    + n2 * n2 * n2 * vec3f(0.75, 0.82, 1.0) * 0.005;
 
   // supernova lights the whole sky for a beat
-  col *= 1.0 + glob.x * exp(-nova.w * 2.2) * 4.5;
+  col *= 1.0 + glob.x * exp(-nova.w * 2.2) * 7.0;
 
   let a = u.trail_gain;
   return vec4f(col * a, a);
@@ -186,11 +186,12 @@ fn vs_star(@builtin(vertex_index) vi: u32) -> VSOut {
 
     let temp = r.z;
     col = mix(vec3f(0.72, 0.82, 1.15), vec3f(1.10, 0.90, 0.68), temp);
-    bright = 0.5 + hz.y * hz.y * 1.3;
+    // steep distribution: most stars faint, top few percent hot (bloom bait)
+    bright = 0.055 + pow(hz.y, 7.0) * 3.4;
     sizeW  = 0.010 + hz.w * hz.w * 0.022;
     if (r.w > 0.988) {   // rare orange giant
       col = vec3f(1.20, 0.55, 0.28);
-      bright *= 2.2; sizeW *= 1.5;
+      bright = bright * 1.6 + 1.1; sizeW *= 1.5;
     }
     // twinkle — gentle at rest, agitated by highs
     let tw = sin(u.time * (1.5 + r.w * 5.0) + r.w * 61.7);
@@ -233,7 +234,11 @@ fn vs_star(@builtin(vertex_index) vi: u32) -> VSOut {
     rel = vec3f(c4.x - cam.y, c4.y - cam.z, zA) + off * scale;
 
     let q = exp(-len2 * 1.3);   // core concentration
-    bright = (0.35 + r3.y * 0.9) * (0.35 + q * 1.9);
+    // dominance: most clusters run dim, ~1 in 4 burns hot — a kick flare
+    // can still lift a dim one into prominence for a beat
+    let dom = mix(0.16, 1.15, smoothstep(0.68, 0.95, cr.w));
+    bright = (0.12 + r3.y * r3.y * 0.85) * (0.20 + q * 2.4);
+    bright *= min(1.30, dom + flare * 0.55);
     bright *= 1.0 + flare * (1.6 + q * 2.8);
     col = mix(hsv2rgb(vec3f(hue, 0.66, 1.0)),
               vec3f(0.98, 1.00, 1.25),
@@ -269,7 +274,7 @@ fn vs_star(@builtin(vertex_index) vi: u32) -> VSOut {
 
   // depth fog: far stars dim and cool — the depth carpet
   let fog = smoothstep(DEPTH, DEPTH * 0.55, pz);
-  var a = bright * fadeMul * smoothstep(0.42, 1.1, pz) * mix(0.22, 1.0, fog);
+  var a = bright * fadeMul * smoothstep(0.42, 1.1, pz) * mix(0.08, 1.0, fog);
   col = mix(col * vec3f(0.55, 0.65, 1.00), col, max(fog, 0.35));
 
   // project + camera roll
@@ -301,7 +306,7 @@ fn vs_star(@builtin(vertex_index) vi: u32) -> VSOut {
   // soft frame vignette: keeps the feedback-echo mirror at the border from
   // stamping crisp streak copies (herringbone), reads as a lens falloff
   let edge = max(abs(clip.x), abs(clip.y));
-  a *= 1.0 - 0.65 * smoothstep(0.86, 1.05, edge);
+  a *= 1.0 - 0.92 * smoothstep(0.74, 1.00, edge);
   return VSOut(vec4f(clip, 0.0, 1.0), vec2f(c.x * ext, c.y), col, a, ext);
 }
 
@@ -366,7 +371,9 @@ fn vs_gas(@builtin(vertex_index) vi: u32) -> VSOut {
   var col = hsv2rgb(vec3f(mix(hue, hue2, r2.z), 0.72, 1.0));
   col = mix(col, vec3f(1.0, 0.95, 0.85), flare * 0.3);
 
-  var a = 0.042 * (0.55 + dyn.w * 0.70 + flare * 1.60 + glob.y * 0.15);
+  // dim gas on non-dominant clusters (same dominance curve as knot stars)
+  let dom = mix(0.18, 1.0, smoothstep(0.68, 0.95, cr.w));
+  var a = 0.013 * dom * (0.55 + dyn.w * 0.70 + flare * 1.60 + glob.y * 0.15);
   a *= smoothstep(DEPTH + 2.0, DEPTH * 0.6, zA);   // fade in from the deep
   a *= smoothstep(0.6, 1.8, zA);                   // dissolve as we fly through
   // nova: the chosen cluster's gas ignites, neighbours catch the light
