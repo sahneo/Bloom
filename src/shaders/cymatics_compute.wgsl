@@ -8,6 +8,10 @@
 // Repurposed uniform slots (this preset owns its uniform buffer):
 //   _r1 = pattern crossfade 0..1     _r2 = strike envelope (kick/drop)
 //   _r3 = shake envelope (snare)     extra[0] = (nA, mA, nB, mB)
+//   extra[1] = (kick strike age s, tap strike age s)
+//   extra[2].xyz = sand colour
+//   extra[3] = (tap x, tap y, tap envelope 0..1) — pointer tap = localized
+//              plate strike; position in grain world coords (y up)
 
 struct Uniforms {
   time:       f32, sub_bass:    f32, bass:      f32, mid:       f32,
@@ -133,6 +137,24 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
     // stronger near the strike point, but the whole plate jumps
     let fall = 0.45 + 0.55 * exp(-dot(rel, rel) * 1.6);
     f += (rdir * 0.85 * osc + sdir * 0.35) * strike * 95.0 * fall;
+  }
+
+  // ── pointer tap: strike the plate AT A POINT ──────────────────────────
+  // Sharp localized hit: grains inside the radius get a radial kick away
+  // from the strike point (quadratic falloff → crater + thrown ring), with
+  // the same cos(age) out-then-back swing as the kick strike so the sand
+  // returns to the figure instead of leaving a permanent hole.
+  let tapEnv = u.extra[3].z;
+  if (tapEnv > 0.003) {
+    let tapAge = u.extra[1].y;
+    let tvec   = g.pos - u.extra[3].xy;        // world coords, y up
+    let tdist  = length(tvec);
+    let tfall  = max(1.0 - tdist * (1.0 / 0.55), 0.0);   // radius 0.55
+    let tosc   = cos(tapAge * 20.0);
+    let tdir   = tvec / max(tdist, 0.02);      // radial, safe at the centre
+    let tjit   = normalize(vec2f(rnd(seed ^ 0x7D1Fu) * 2.0 - 1.0,
+                                 rnd(seed ^ 0x1C9Bu) * 2.0 - 1.0) + vec2f(0.0001));
+    f += (tdir * tosc + tjit * 0.25) * tfall * tfall * tapEnv * 300.0;
   }
 
   // ── snare: brief high-frequency shake ────────────────────────────────

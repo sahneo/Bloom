@@ -48,7 +48,15 @@ export class CymaticsPreset {
     this._eMid  = 0.3;
     this._eHigh = 0.2;
 
-    this._extra = new Float32Array(12);  // [0]=(nA,mA,nB,mB) [1]=(strikeAge,...) [2]=sand RGB
+    // pointer tap → localized plate strike
+    this._prevTapN = null;   // null = not yet synced with params.cymTapN
+    this._tapEnv   = 0;      // strike envelope 0..1
+    this._tapAge   = 9;      // seconds since last tap
+    this._tapX     = 0;      // strike point in world coords
+    this._tapY     = 0;
+
+    // [0]=(nA,mA,nB,mB) [1]=(strikeAge, tapAge) [2]=sand RGB [3]=(tapX, tapY, tapEnv)
+    this._extra = new Float32Array(16);
   }
 
   async init(device, format, canvas) {
@@ -215,6 +223,23 @@ export class CymaticsPreset {
     const dt = Math.min(deltaMs * 0.001, 0.05);
     this._updateMusic(bands, dt, params);
 
+    // ── pointer tap → strike the plate at that point ──────────────────────
+    // main.js increments params.cymTapN on every canvas tap and stores the
+    // position in canvas UV (0..1, y down). Convert to grain world space:
+    // x ∈ [-asp, asp], y ∈ [-1, 1] with y UP.
+    const tapN = params.cymTapN ?? 0;
+    if (this._prevTapN === null) this._prevTapN = tapN;   // ignore stale taps on preset switch
+    if (tapN !== this._prevTapN) {
+      this._prevTapN = tapN;
+      const asp = Math.max(this.canvas.width / this.canvas.height, 0.5) || 1.6;
+      this._tapX = ((params.cymTapX ?? 0.5) * 2 - 1) * asp;
+      this._tapY = 1 - (params.cymTapY ?? 0.5) * 2;
+      this._tapEnv = 1.0;      // rapid taps restart the envelope
+      this._tapAge = 0;
+    }
+    this._tapAge += dt;
+    this._tapEnv *= Math.exp(-dt * 7);   // ~0.4 s decay, dt-scaled
+
     const { gain } = PostFX.trailFactors(params, deltaMs);
     const u = buildUniforms(bands, timeMs, deltaMs, params, this.canvas, this.frameCount, gain);
     const c = this._cross;
@@ -227,10 +252,14 @@ export class CymaticsPreset {
     this._extra[2] = this._patB[0];
     this._extra[3] = this._patB[1];
     this._extra[4] = this._strikeAge;
+    this._extra[5] = this._tapAge;
     const sand = params.sandColor ?? [1.0, 0.84, 0.52];
     this._extra[8]  = sand[0];
     this._extra[9]  = sand[1];
     this._extra[10] = sand[2];
+    this._extra[12] = this._tapX;
+    this._extra[13] = this._tapY;
+    this._extra[14] = this._tapEnv;
     device.queue.writeBuffer(this.uniformBuffer, RIPPLE_OFFSET, this._extra);
 
     const enc  = device.createCommandEncoder();
