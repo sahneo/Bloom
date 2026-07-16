@@ -219,6 +219,7 @@ const params = {
   paletteMode: 0,  // palette director: mono/duotone/complementary/analogous
   kaleidoK: 0,     // kaleidoscope segments (0 = off), picked per scene
   camZoom: 1, camRot: 0,   // composite-pass camera
+  cymTapX: 0.5, cymTapY: 0.5, cymTapN: 0,   // canvas tap strike (CYMATICS)
 };
 
 function bindSlider(id, valId, key) {
@@ -789,6 +790,15 @@ async function init() {
   }
   window.__setMode = setMode;   // tests + AutoVJ preset rotation
 
+  // CYMATICS: tap the plate — strike position in canvas UV (y down)
+  canvas.addEventListener('pointerdown', (e) => {
+    if (currentMode !== 'cymatics') return;
+    const r = canvas.getBoundingClientRect();
+    params.cymTapX = (e.clientX - r.left) / r.width;
+    params.cymTapY = (e.clientY - r.top) / r.height;
+    params.cymTapN++;
+  });
+
   // Cinematic switch: 'fade' dips through black (phrase boundaries, manual
   // picks), 'flash' hides the cut inside a white drop flash (drops)
   let _switching = false;
@@ -1338,6 +1348,72 @@ async function init() {
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+
+  // ── Share preset via URL ───────────────────────────────────────────
+  // SHARE snapshots the mode + every control into a base64url hash and
+  // copies the link; opening such a link restores the exact look.
+  const SHARE_SKIP = new Set(['mode-select', 'media-input', 'file-input',
+                              'wled-host', 'ty-color', 'transport-scrub']);
+  function snapshotPreset() {
+    const els = {};
+    for (const el of document.querySelectorAll('input[id], select[id]')) {
+      if (SHARE_SKIP.has(el.id) || el.type === 'file') continue;
+      els[el.id] = el.type === 'checkbox' ? el.checked : el.value;
+    }
+    return {
+      mode: currentMode,
+      els,
+      fxP: [...(params.fxP ?? [])],
+      pal: params.voidPalette ?? 0,
+      prismClassic: !!params.prismClassic,
+      tyColor: params.tyColor ? document.getElementById('ty-color').value : null,
+    };
+  }
+  async function applyPreset(s) {
+    if (MODES[s.mode]) await setMode(s.mode);
+    // selects first — fx-effect's change re-renders its dial set
+    for (const pass of ['SELECT', 'INPUT']) {
+      for (const [id, v] of Object.entries(s.els ?? {})) {
+        const el = document.getElementById(id);
+        if (!el || el.tagName !== pass) continue;
+        if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
+        el.dispatchEvent(new Event(el.tagName === 'SELECT' || el.type === 'checkbox' ? 'change' : 'input', { bubbles: true }));
+      }
+    }
+    document.querySelectorAll('#fx-dials input').forEach((sl, i) => {
+      if (s.fxP?.[i] === undefined) return;
+      sl.value = s.fxP[i];
+      sl.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    params.voidPalette = s.pal ?? 0;
+    btnPal.textContent = params.voidPalette ? PAL_NAMES[params.voidPalette] : 'PAL';
+    btnPal.classList.toggle('active', params.voidPalette > 0);
+    params.prismClassic = !!s.prismClassic;
+    btnPrismEnv.textContent = params.prismClassic ? 'CLASSIC' : 'STUDIO';
+    if (s.tyColor) {
+      const inp = document.getElementById('ty-color');
+      inp.value = s.tyColor;
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }
+  const b64e = (o) => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(o))))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const b64d = (s) => JSON.parse(new TextDecoder().decode(
+    Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))));
+
+  const btnShare = document.getElementById('btn-share');
+  btnShare.addEventListener('click', async () => {
+    const hash = '#p=' + b64e(snapshotPreset());
+    history.replaceState(null, '', hash);
+    try { await navigator.clipboard.writeText(location.origin + location.pathname + hash); } catch (_) {}
+    btnShare.textContent = 'COPIED';
+    setTimeout(() => { btnShare.textContent = 'SHARE'; }, 1200);
+    posthog.capture('preset_shared', { mode: currentMode });
+  });
+  if (location.hash.startsWith('#p=')) {
+    try { await applyPreset(b64d(location.hash.slice(3))); }
+    catch (e) { console.warn('preset link parse failed', e); }
+  }
 }
 
 init();
