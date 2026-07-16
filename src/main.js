@@ -27,6 +27,7 @@ import { PrismPreset }        from './presets/prism.js';
 import { FxPreset }           from './presets/fx.js';
 import { TypePreset }         from './presets/type.js';
 import { WledSync }           from './wled.js';
+import { GestureControl }     from './gesture.js';
 import posthogLib from 'posthog-js';
 
 // Analytics key comes from the environment (.env.local / Vercel env) — never
@@ -1039,6 +1040,34 @@ async function init() {
     btnPal.classList.toggle('active', params.voidPalette > 0);
   });
 
+  // Gesture control: webcam hand steers the composition (Motion Lab style)
+  const gesture    = new GestureControl();
+  const btnCam     = document.getElementById('btn-cam');
+  const camPreview = document.getElementById('cam-preview');
+  const camDot     = document.getElementById('cam-dot');
+  btnCam.addEventListener('click', async () => {
+    if (gesture.active) {
+      gesture.stop();
+      camPreview.querySelector('video')?.remove();
+      camPreview.classList.add('hidden');
+      btnCam.classList.remove('active');
+      return;
+    }
+    btnCam.textContent = '...';
+    try {
+      await gesture.start();
+      camPreview.prepend(gesture.video);
+      camPreview.classList.remove('hidden');
+      btnCam.classList.add('active');
+      btnCam.textContent = 'CAM';
+      posthog.capture('gesture_enabled');
+    } catch (e) {
+      console.error('gesture:', e);
+      btnCam.textContent = 'ERR';
+      setTimeout(() => { btnCam.textContent = 'CAM'; }, 1500);
+    }
+  });
+
   // Cymatics sand colour
   const btnSandColor   = document.getElementById('btn-sand-color');
   const sandColorInput = document.getElementById('sand-color-input');
@@ -1311,6 +1340,20 @@ async function init() {
                    + (params.zoomPunch ?? 0) * 0.35
                    + Math.max(0, (drift.scale - 1.05)) * 0.30;
     params.camRot  = drift.rot * 0.35 + _kaleidoSpin;
+
+    // Gesture: hand pans the composition, pinch zooms, fast swipe pops
+    if (gesture.active) {
+      gesture.update(dtS);
+      const g = gesture.present;
+      params.driftX  += (gesture.x - 0.5) * 0.9 * g;
+      params.driftY  += (0.5 - gesture.y) * 0.7 * g;
+      params.camZoom += gesture.pinch * 0.45 * g;
+      if (gesture.vel > 1.5 && g > 0.5)
+        params.zoomPunch = Math.max(params.zoomPunch ?? 0, Math.min(gesture.vel * 0.18, 0.6));
+      camDot.style.left = (gesture.x * 100) + '%';
+      camDot.style.top  = (gesture.y * 100) + '%';
+      camDot.style.opacity = g > 0.3 ? 1 : 0;
+    }
 
     // Post-chain inputs: nebula/grain clock, sub-bass breathing, echo steps
     // (scene picks a per-frame step at 60 fps; correct it for real frame time)

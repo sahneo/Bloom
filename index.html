@@ -732,6 +732,36 @@
     }
     .btn-add-media:hover { background: rgba(255,255,255,0.14); color: #fff; }
 
+    /* ── Gesture cam preview ─────────────────────────────────────── */
+    #cam-preview {
+      position: fixed;
+      right: 20px;
+      bottom: 60px;
+      width: 150px;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.18);
+      opacity: 0.75;
+      pointer-events: none;
+      z-index: 30;
+    }
+    #cam-preview.hidden { display: none; }
+    #cam-preview video {
+      width: 100%;
+      display: block;
+      transform: scaleX(-1);
+    }
+    #cam-dot {
+      position: absolute;
+      width: 10px;
+      height: 10px;
+      margin: -5px 0 0 -5px;
+      border-radius: 50%;
+      background: #7fd8ff;
+      box-shadow: 0 0 8px #7fd8ff;
+      transition: opacity 0.3s;
+    }
+
     /* ── Cymatics sand colour swatch ─────────────────────────────── */
     #btn-sand-color {
       position: fixed;
@@ -1049,6 +1079,7 @@
   <button id="btn-vj" class="active" title="Auto-VJ: rotates visual modes on musical events">VJ</button>
   <button id="btn-proj" title="Projector: open a clean output window for a second display">PROJ</button>
   <button id="btn-share" title="Copy a link that restores this exact look — mode + every dial">SHARE</button>
+  <button id="btn-cam" title="Gesture control: hand pans, pinch zooms, swipe pops (webcam)">CAM</button>
   <input id="wled-host" type="text" placeholder="WLED IP" spellcheck="false"
          title="Address of your WLED device (e.g. 192.168.1.19)">
   <button id="btn-wled" title="Mirror visuals to a WLED strip (needs local relay: node tools/wled-relay.mjs)">WLED</button>
@@ -1355,6 +1386,8 @@
   </div>
   <div class="media-list"></div>
 </div>
+
+<div id="cam-preview" class="hidden"><div id="cam-dot"></div></div>
 
 <button id="btn-ripple-color" title="Ripple color"></button>
 <input type="color" id="ripple-color-input" value="#00D9FF" style="display:none">
