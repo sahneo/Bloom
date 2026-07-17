@@ -737,6 +737,8 @@
     .btn-add-media {
       font-size: 0.6rem;
       letter-spacing: 0.08em;
+      white-space: nowrap;
+      flex-shrink: 0;
       padding: 3px 9px;
       border: 1px solid rgba(255,255,255,0.22);
       border-radius: 5px;
@@ -1294,7 +1296,7 @@
   </div>
   <div class="tune-divider"></div>
   <div class="media-head">
-    <span class="tune-label">Media (Source: media)</span>
+    <span class="tune-label" title="Shown behind the glass when Source = media">Media</span>
     <button class="btn-add-media" title="Load images/videos to show behind the glass">+ MEDIA</button>
   </div>
   <div class="media-list"></div>
