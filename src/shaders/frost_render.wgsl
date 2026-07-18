@@ -8,6 +8,12 @@
 //   extra[0] = (gridW, gridH, growthRate, meltRate)
 //   extra[1] = (shatterEnv, kickEnv, snareEnv, dissolve)
 //   extra[8] = (bassEnv, sparkleEnv, growthTexScale, shatterSeed)
+//   extra[9] = (shiftIntX, shiftIntY, travelEnv, 0)  camera travel phase
+//   extra[10] = (shiftFracX, shiftFracY, camU, camV)  sub-cell shift
+//              remainder (cells) + accumulated camera offset (UV) — the
+//              remainder smooths the cell-quantized glide, the offset keeps
+//              ridge/lace textures anchored to the ice, and drives a subtle
+//              background parallax
 
 struct Uniforms {
   time:       f32, sub_bass:    f32, bass:      f32, mid:       f32,
@@ -116,13 +122,14 @@ fn voro(p: vec2f, seed: f32) -> vec4f {
   return vec4f(f1, f2, id);
 }
 
-// faint cold night-glass gradient behind the ice
-fn background(uv: vec2f, asp: f32) -> vec3f {
+// faint cold night-glass gradient behind the ice; cam = parallax offset —
+// during camera travel the sheen drifts at a fraction of the ice speed
+fn background(uv: vec2f, asp: f32, cam: vec2f) -> vec3f {
   let pa = vec2f(uv.x * asp, uv.y);
   var c = mix(vec3f(0.004, 0.007, 0.016), vec3f(0.010, 0.020, 0.046),
               smoothstep(1.15, -0.15, uv.y));
   // slow drifting cold sheen, barely there
-  let n = fbm(pa * 1.6 + vec2f(u.time * 0.014, -u.time * 0.009) + u.scene_seed);
+  let n = fbm((pa + cam) * 1.6 + vec2f(u.time * 0.014, -u.time * 0.009) + u.scene_seed);
   c += vec3f(0.006, 0.013, 0.026) * smoothstep(0.45, 0.95, n);
   return c;
 }
@@ -146,9 +153,14 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
     suv += (vec2f(facet, hash12(v.zw + 9.1)) - 0.5) * 0.020 * shatter;
   }
 
-  let aB  = ageSmooth(suv);
+  // camera travel: the compute pass shifts whole cells; the fractional
+  // remainder is applied here as a sampling offset so the glide is
+  // sub-cell smooth instead of stepping cell by cell
+  let E10 = u.extra[10];
   let gw  = E0.x; let gh = E0.y;
-  let lat = cellAt(i32(suv.x * gw), i32(suv.y * gh)).y;
+  let cuv = suv + vec2f(E10.x / gw, E10.y / gh);
+  let aB  = ageSmooth(cuv);
+  let lat = cellAt(i32(cuv.x * gw), i32(cuv.y * gh)).y;
 
   // ice body mask — melting softens the boundary
   let meltSoft = clamp(E0.w * 0.8, 0.0, 1.0);
@@ -161,11 +173,18 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
   m *= hide; fresh *= hide; thick *= hide;
 
   // ── crystalline ridges stretched along the lattice axis ─────────────
-  let pa = vec2f(suv.x * asp, suv.y);
+  // world-anchored (camera offset added) so the striations travel WITH the
+  // ice instead of swimming under it during camera motion
+  let pa = vec2f((cuv.x + E10.z) * asp, cuv.y + E10.w);
   let ca = cos(lat); let sa = sin(lat);
   let q  = vec2f(dot(pa, vec2f(ca, sa)), dot(pa, vec2f(-sa, ca)));
   let ridge = fbm(q * vec2f(24.0, 110.0) + u.scene_seed * 5.0);
-  let ridge2 = fbm(q * vec2f(60.0, 240.0) + 31.7);    // micro grain
+  // micro grain stays screen-anchored: at ×240 frequency a large world
+  // offset would exhaust f32 hash precision, and at 0.022 amplitude the
+  // swim is invisible anyway
+  let qs = vec2f(suv.x * asp, suv.y);
+  let q2 = vec2f(dot(qs, vec2f(ca, sa)), dot(qs, vec2f(-sa, ca)));
+  let ridge2 = fbm(q2 * vec2f(60.0, 240.0) + 31.7);
 
   // lace density — same macro gate the growth uses, so shading follows
   // the dendrite structure: thin translucent ice near the dark veins
@@ -180,7 +199,8 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
   // ── compose ─────────────────────────────────────────────────────────
   // glass with subtle refraction shimmer through the ice
   let refr = (ridge - 0.5) * 0.020 * m;
-  var col = background(suv + refr, asp) * (1.0 - m * 0.72 * lace);
+  let camPar = vec2f(E10.z * asp, E10.w) * 0.35;   // background lags the ice
+  var col = background(suv + refr, asp, camPar) * (1.0 - m * 0.72 * lace);
 
   // matte ice body: dark, contrasty, striated along the crystal axis
   let body = (0.014 + ridge * ridge * 0.085 + ridge2 * 0.022 + thick * 0.022) * lace;

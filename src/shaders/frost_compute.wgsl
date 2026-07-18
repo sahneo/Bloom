@@ -15,6 +15,11 @@
 //   extra[6] = (hand0 x, y, meltStrength, present)
 //   extra[7] = (hand1 x, y, meltStrength, present)
 //   extra[8] = (bassEnv, sparkleEnv, growthTexScale, shatterSeed)
+//   extra[9] = (shiftIntX, shiftIntY, travelEnv, 0)  camera travel — integer
+//              cells this frame; dst(x,y) reads src(x+shift, y+shift)
+//   extra[10] = (shiftFracX, shiftFracY, camU, camV)  sub-cell remainder in
+//              cells (render smoothing) + accumulated camera offset in UV
+//              (anchors the lace gate to the content, not the screen)
 
 struct Uniforms {
   time:       f32, sub_bass:    f32, bass:      f32, mid:       f32,
@@ -61,6 +66,15 @@ fn fbm(p: vec2f) -> f32 {
   return v * 1.14;
 }
 
+// camera travel: dst cell reads the old buffer at (cell + shift). Outside
+// the old grid = virgin glass sliding in at the leading edge, flagged as
+// age -1 so callers can tell "fresh pane" from "clear but present".
+fn srcCell(x: i32, y: i32, gw: i32, gh: i32, k: vec2i) -> vec2f {
+  let sx = x + k.x; let sy = y + k.y;
+  if (sx < 0 || sx >= gw || sy < 0 || sy >= gh) { return vec2f(-1.0, 0.0); }
+  return src[u32(sy * gw + sx)];
+}
+
 @compute @workgroup_size(16, 16)
 fn cs_grow(@builtin(global_invocation_id) gid: vec3u) {
   let E0 = u.extra[0];
@@ -71,8 +85,10 @@ fn cs_grow(@builtin(global_invocation_id) gid: vec3u) {
   if (x >= gw || y >= gh) { return; }
   let idx = u32(y * gw + x);
 
-  let E1 = u.extra[1];
-  let E8 = u.extra[8];
+  let E1  = u.extra[1];
+  let E8  = u.extra[8];
+  let E10 = u.extra[10];
+  let K  = vec2i(i32(u.extra[9].x), i32(u.extra[9].y));
   let dt = min(u.delta, 0.05);
   let fx = f32(x); let fy = f32(y);
   let p  = vec2f((fx + 0.5) / f32(gw), (fy + 0.5) / f32(gh));
@@ -91,7 +107,8 @@ fn cs_grow(@builtin(global_invocation_id) gid: vec3u) {
     if (r < 0.17) { handMelt += H.z * (1.0 - r / 0.17); }
   }
 
-  let c = src[idx];
+  var c = srcCell(x, y, gw, gh, K);
+  if (c.x < 0.0) { c = vec2f(0.0); }   // virgin glass entering the viewport
 
   if (c.x > 0.0) {
     // ── frozen: age, or melt away ─────────────────────────────────────
@@ -106,11 +123,12 @@ fn cs_grow(@builtin(global_invocation_id) gid: vec3u) {
     // quiet-passage melt: only the growth front (cells touching clear glass)
     // retreats, so the lace thins from its edges inward
     if (E0.w > 0.001) {
+      // (age == 0.0 means clear glass in view; -1 = beyond the pane, not front)
       var onFront = false;
-      if (x > 0      && src[idx - 1u].x        <= 0.0) { onFront = true; }
-      if (x < gw - 1 && src[idx + 1u].x        <= 0.0) { onFront = true; }
-      if (y > 0      && src[u32((y - 1) * gw + x)].x <= 0.0) { onFront = true; }
-      if (y < gh - 1 && src[u32((y + 1) * gw + x)].x <= 0.0) { onFront = true; }
+      if (srcCell(x - 1, y, gw, gh, K).x == 0.0) { onFront = true; }
+      if (srcCell(x + 1, y, gw, gh, K).x == 0.0) { onFront = true; }
+      if (srcCell(x, y - 1, gw, gh, K).x == 0.0) { onFront = true; }
+      if (srcCell(x, y + 1, gw, gh, K).x == 0.0) { onFront = true; }
       if (onFront && rnd < E0.w * dt) { dst[idx] = vec2f(0.0); return; }
     }
     dst[idx] = vec2f(min(c.x + dt, 90.0), c.y);
@@ -138,10 +156,8 @@ fn cs_grow(@builtin(global_invocation_id) gid: vec3u) {
   for (var oy = -1; oy <= 1; oy++) {
     for (var ox = -1; ox <= 1; ox++) {
       if (ox == 0 && oy == 0) { continue; }
-      let nx = x + ox; let ny = y + oy;
-      if (nx < 0 || nx >= gw || ny < 0 || ny >= gh) { continue; }
-      let n = src[u32(ny * gw + nx)];
-      if (n.x <= 0.0) { continue; }
+      let n = srcCell(x + ox, y + oy, gw, gh, K);
+      if (n.x <= 0.0) { continue; }   // clear, or beyond the pane (-1)
       nFrozen++;
       // direction from the frozen neighbour toward this cell
       let phi = atan2(f32(-oy), f32(-ox));
@@ -163,8 +179,10 @@ fn cs_grow(@builtin(global_invocation_id) gid: vec3u) {
   else if (nFrozen >= 3) { best *= 0.03; }
   if (best > 0.0005) {
     // hard fbm lace gate: part of the pane can never freeze → permanent
-    // dark veins between dendrite ferns instead of a solid sheet
-    let pa = p * vec2f(asp, 1.0);
+    // dark veins between dendrite ferns instead of a solid sheet.
+    // Anchored to content (camera offset added), so the veins glide with
+    // the ice during travel instead of sticking to the screen.
+    let pa = vec2f((p.x + E10.z) * asp, p.y + E10.w);
     let n1 = fbm(pa * E8.z + u.scene_seed * 7.31);
     let n2 = vnoise(pa * E8.z * 4.3 + u.scene_seed * 3.1);
     var g = 0.08 + 0.92 * smoothstep(0.44, 0.58, n1);   // macro lace
@@ -175,4 +193,19 @@ fn cs_grow(@builtin(global_invocation_id) gid: vec3u) {
   }
 
   dst[idx] = vec2f(0.0);
+}
+
+// ── coverage estimate ─────────────────────────────────────────────────
+// One 16×16 workgroup samples a 256-point lattice over the grid and counts
+// frozen cells into an atomic. JS copies the 4 bytes to a staging buffer
+// every ~2 s (mapAsync) → coverage 0..1 drives the early-travel trigger.
+@group(0) @binding(3) var<storage, read_write> cov: atomic<u32>;
+
+@compute @workgroup_size(16, 16)
+fn cs_coverage(@builtin(local_invocation_id) lid: vec3u) {
+  let gw = i32(u.extra[0].x);
+  let gh = i32(u.extra[0].y);
+  let x = clamp((i32(lid.x) * 2 + 1) * gw / 32, 0, gw - 1);
+  let y = clamp((i32(lid.y) * 2 + 1) * gh / 32, 0, gh - 1);
+  if (src[u32(y * gw + x)].x > 0.0) { atomicAdd(&cov, 1u); }
 }
