@@ -27,6 +27,11 @@ import { PrismPreset }        from './presets/prism.js';
 import { FxPreset }           from './presets/fx.js';
 import { TypePreset }         from './presets/type.js';
 import { PhysarumPreset }     from './presets/physarum.js';
+import { AuroraPreset }       from './presets/aurora.js';
+import { PyroPreset }         from './presets/pyro.js';
+import { FirefliesPreset }    from './presets/fireflies.js';
+import { MitosisPreset }      from './presets/mitosis.js';
+import { FrostPreset }        from './presets/frost.js';
 import { WledSync }           from './wled.js';
 import { GestureControl }     from './gesture.js';
 import posthogLib from 'posthog-js';
@@ -770,6 +775,11 @@ async function init() {
     fx:           FxPreset,
     type:         TypePreset,
     physarum:     PhysarumPreset,
+    aurora:       AuroraPreset,
+    pyro:         PyroPreset,
+    fireflies:    FirefliesPreset,
+    mitosis:      MitosisPreset,
+    frost:        FrostPreset,
   };
   const modeSelect = document.getElementById('mode-select');
 
@@ -795,17 +805,17 @@ async function init() {
   }
   window.__setMode = setMode;   // tests + AutoVJ preset rotation
 
-  // Tap the canvas: CYMATICS gets a plate strike, PHYSARUM gets a food
-  // drop (same UV fields); every other mode gets a light universal punch
+  // Tap the canvas: position + counter go to every preset (cymatics
+  // strikes the plate, physarum drops food, others may listen too);
+  // modes without their own tap physics also get a light universal punch
+  const TAP_PHYSICS_MODES = new Set(['cymatics', 'physarum']);
   canvas.addEventListener('pointerdown', (e) => {
-    if (currentMode === 'cymatics' || currentMode === 'physarum') {
-      const r = canvas.getBoundingClientRect();
-      params.cymTapX = (e.clientX - r.left) / r.width;
-      params.cymTapY = (e.clientY - r.top) / r.height;
-      params.cymTapN++;
-    } else {
+    const r = canvas.getBoundingClientRect();
+    params.cymTapX = (e.clientX - r.left) / r.width;
+    params.cymTapY = (e.clientY - r.top) / r.height;
+    params.cymTapN++;
+    if (!TAP_PHYSICS_MODES.has(currentMode))
       params.zoomPunch = Math.max(params.zoomPunch ?? 0, 0.35);
-    }
   });
 
   // Cinematic switch: 'fade' dips through black (phrase boundaries, manual
