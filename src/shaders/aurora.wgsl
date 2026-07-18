@@ -11,19 +11,27 @@
 // Music mapping (fields computed JS-side, uploaded via `extra`):
 //   bass  → sway amplitude of whole curtains (slow horizontal breathing)
 //   mid   → fold amplitude (ripples in the curtain fabric)
-//   high  → ray flicker speed + contrast (shimmer)
+//   high  → ray flicker rate + contrast (shimmer)
 //   kick  → brightness wave traveling ALONG a curtain (waveX/waveAmp)
-//   snare → short global shimmer flicker (extra[12].y)
+//   snare → subtle shimmer swell (folded into rayContr/flickPhase JS-side)
 //   tension → curtains reach higher + saturate (extra[12].w)
 //   drop  → substorm (extra[12].x): all curtains erupt, corona blooms at
 //           the zenith (extra[13].x), colors shift red→purple, then calm.
+//
+// IMPORTANT: every audio-driven field in `extra` is EMA-smoothed and/or
+// slew-limited JS-side (aurora.js) — this shader only ever receives slow
+// signals, so raw FFT frame jitter can never become visible motion. The
+// ray flicker uses an integrated phase (extra[14].z) instead of
+// u.time * rate: with u.time * rate, any per-frame rate change scrambled
+// the noise phase by delta_rate * elapsed_seconds → strobing rays.
 //
 // extra slot layout (16 × vec4f at byte offset 176):
 //   extra[0..5]  per curtain i: (x_center -1..1, seed, age_s, amp)
 //   extra[6..11] per curtain i: (width, waveX_local, waveAmp, ignite)
 //   extra[12]    (substorm, snareFlicker, energySmooth, raise/tension)
-//   extra[13]    (coronaEnv, tapFlash, 0, 0)
-//   extra[14..15] reserved
+//   extra[13]    (coronaEnv, tapFlash, pulseSmooth, 0)
+//   extra[14]    (swayAmp, foldAmp, flickPhase, rayContr)
+//   extra[15]    reserved
 //
 // Bright ray cores reach 2-5 HDR so the shared bloom chain (threshold 0.30)
 // makes them glow; the frame stays dark with few hot highlights.
@@ -125,20 +133,19 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
   let sp = vec2f((in.uv.x - 0.5) * 2.0 * aspect, (0.5 - in.uv.y) * 2.0);
 
   let substorm = u.extra[12].x;
-  let flick    = u.extra[12].y;
-  let energy   = u.extra[12].z;
   let raise    = u.extra[12].w;
   let corona   = u.extra[13].x;
   let tapflash = u.extra[13].y;
+  let pulse_sm = u.extra[13].z;
 
   let key_col = hsv2rgb(vec3f(u.key_hue, 0.6, 1.0));
   let key_amt = clamp(u.key_conf, 0.0, 1.0);
 
-  // music → motion character
-  let sway_amp   = 0.14 + u.bass * u.mul_bass * 0.34 + substorm * 0.18;
-  let fold_amp   = 0.30 + u.mid  * u.mul_mid  * 0.55 + substorm * 0.25;
-  let flick_spd  = 1.0 + u.high * u.mul_high * 6.5 + flick * 5.0 + substorm * 3.0;
-  let ray_contr  = 0.40 + u.high * u.mul_high * 0.50 + flick * 0.45 + substorm * 0.35;
+  // music → motion character — EMA-smoothed + slew-limited JS-side
+  let sway_amp    = u.extra[14].x;
+  let fold_amp    = u.extra[14].y;
+  let flick_phase = u.extra[14].z;   // integrated at a capped rate in JS
+  let ray_contr   = u.extra[14].w;
 
   // ── Sky: near-black arctic night, faint blue gradient ─────────────────
   let up = clamp(sp.y * 0.75 + 0.6, 0.0, 1.0);
@@ -178,8 +185,8 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
     let fold = (fbm3(vec2f(xs * 1.7 + seed * 5.0, tt * 0.085)) - 0.5) * fold_amp;
     let shear = (hash11(seed * 9.13) - 0.5) * 0.55 + sway * 0.4;
     let rc = (xs + fold + h * shear) * 19.0;
-    let r1 = noise2(vec2f(rc,              seed * 17.0 + u.time * flick_spd * 0.13));
-    let r2 = noise2(vec2f(rc * 2.6 + 31.0, seed *  7.0 + u.time * flick_spd * 0.21));
+    let r1 = noise2(vec2f(rc,              seed * 17.0 + flick_phase * 0.13));
+    let r2 = noise2(vec2f(rc * 2.6 + 31.0, seed *  7.0 + flick_phase * 0.21));
     var fine = clamp((r1 * 0.62 + r2 * 0.38) * 2.0 - 0.68, 0.0, 1.0);
     fine = fine * fine * (3.0 - 2.0 * fine);
     let rays = 0.22 + fine * (0.9 + ray_contr * 1.8);
@@ -261,8 +268,8 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
            + aurora_palette(0.15, substorm) * alum * 0.02;
   col = mix(col, gcol, ground);
 
-  // MIDI note attacks + tap flash nudge the whole frame
-  col *= 1.0 + u.pulse * 0.14 + tapflash * 0.10;
+  // MIDI note attacks (smoothed JS-side) + eased tap flash nudge the frame
+  col *= 1.0 + pulse_sm * 0.14 + tapflash * 0.10;
 
   // trail_gain carries the motion-blur alpha (persistence) from JS
   return vec4f(col, u.trail_gain);

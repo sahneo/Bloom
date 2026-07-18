@@ -20,20 +20,33 @@ export class AuroraPreset {
     this._params = null;
     this.curtains = Array.from({ length: MAX_CURTAINS }, () => ({
       x: 0, seed: Math.random() * 100, age: 999, amp: 0, target: 0,
-      life: 0, width: 1, waveX: 0, waveAmp: 0, waveDir: 1, ignite: 0,
+      life: 0, width: 1, waveX: 0, waveAmp: 0, waveTarget: 0, waveDir: 1,
+      ignite: 0, igniteT: 0,
     }));
     this.extra = new Float32Array(64);
     this.prevKick = 0;
     this.prevSnare = 0;
     this.prevDrop = 0;
     this.prevTap = null;      // null → first frame never reads a ghost tap
-    this.substorm = 0;        // drop envelope: whole-sky eruption
-    this.corona = 0;          // zenith corona bloom
-    this.flicker = 0;         // snare shimmer
-    this.tapFlash = 0;
+    // All envelopes below are follower/target pairs: the *T target is set by
+    // transients and decays; the follower EMA-eases toward it so the shader
+    // never sees a single-frame jump. Real aurora flows — it never snaps.
+    this.substorm = 0;  this.substormT = 0;  // drop: whole-sky eruption
+    this.corona = 0;    this.coronaT = 0;    // zenith corona bloom
+    this.flicker = 0;   this.flickerT = 0;   // snare shimmer (subtle)
+    this.tapFlash = 0;  this.tapFlashT = 0;
     this.energy = 0;          // smoothed band energy
-    this.raise = 0;           // smoothed tension → curtains creep higher
+    this.raise = 0;           // slew-limited tension → curtains creep higher
+    this.raiseT = 0;          // EMA stage feeding this.raise
     this.nextSpawnAt = 0;
+    // asymmetric EMA (attack ~0.2 s / release ~1-2 s) of every raw band —
+    // the only audio state the uniforms ever receive
+    this.sm = { sub: 0, bass: 0, mid: 0, high: 0, kick: 0, snare: 0, pulse: 0 };
+    // slew-limited motion-character drivers uploaded in extra[14]
+    this.swayAmp = 0.14;      // quiet-state baselines match the shader's old
+    this.foldAmp = 0.30;      //   constants exactly, so silence is unchanged
+    this.rayContr = 0.40;
+    this.flickPhase = null;   // integrated ray-flicker phase (init to t)
   }
 
   async init(device, format, canvas) {
@@ -104,7 +117,8 @@ export class AuroraPreset {
     c.life = life;
     c.width = opts.width ?? (0.45 + Math.random() * 0.85);
     c.waveAmp = 0;
-    c.ignite = opts.ignite ?? 0.45;
+    c.waveTarget = 0;
+    c.igniteT = opts.ignite ?? 0.45;   // eased in by the follower, not snapped
     return c;
   }
 
@@ -118,10 +132,28 @@ export class AuroraPreset {
     const snare = bands.snare ?? 0;
     const drop  = params.dropPulse ?? 0;
 
-    // smoothed musical state (dt-scaled)
-    const e = ((bands.bass ?? 0) + (bands.mid ?? 0) + (bands.high ?? 0)) / 3;
+    // asymmetric EMA: fast-ish attack, slow release (tau in seconds)
+    const ema = (cur, tgt, tauA, tauR) =>
+      cur + (tgt - cur) * (1 - Math.exp(-dt / (tgt > cur ? tauA : tauR)));
+    // slew limiter: cap |d/dt| at `rate` units per second
+    const slew = (cur, tgt, rate) =>
+      cur + Math.max(-rate * dt, Math.min(rate * dt, tgt - cur));
+
+    // ── Band smoothing: raw FFT frames never reach the uniforms ─────────
+    const S = this.sm;
+    S.sub   = ema(S.sub,   bands.subBass ?? 0, 0.20, 1.5);
+    S.bass  = ema(S.bass,  bands.bass    ?? 0, 0.20, 1.5);
+    S.mid   = ema(S.mid,   bands.mid     ?? 0, 0.20, 1.5);
+    S.high  = ema(S.high,  bands.high    ?? 0, 0.20, 1.2);
+    S.kick  = ema(S.kick,  kick,               0.15, 1.0);
+    S.snare = ema(S.snare, snare,              0.15, 1.0);
+    S.pulse = ema(S.pulse, params.pulse ?? 0,  0.09, 0.35);  // MIDI flash → swell
+
+    // smoothed musical state (dt-scaled) — fed by the smoothed bands
+    const e = (S.bass + S.mid + S.high) / 3;
     this.energy += (e - this.energy) * (1 - Math.exp(-dt * 1.2));
-    this.raise  += ((params.tension ?? 0) - this.raise) * (1 - Math.exp(-dt * 2.0));
+    this.raiseT += ((params.tension ?? 0) - this.raiseT) * (1 - Math.exp(-dt * 2.0));
+    this.raise = slew(this.raise, this.raiseT, 0.35);  // curtain height creeps, never yanks
 
     // ── Population: quiet music = one faint slow curtain; activity grows it
     const desired = this.substorm > 0.35
@@ -146,13 +178,18 @@ export class AuroraPreset {
       c.age += dt;
       c.life -= dt;
       if (c.life < 0 && c.target > 0 && this.substorm < 0.3) c.target = 0;
-      const k = c.target > c.amp ? 1.1 : 0.35;   // ignite faster than fade
+      // ignite faster than fade; substorms bloom quicker (~0.3 s) but still ease
+      const k = c.target > c.amp ? 1.1 + this.substorm * 2.5 : 0.35;
       c.amp += (c.target - c.amp) * (1 - Math.exp(-dt * k));
-      c.ignite *= Math.exp(-dt * 2.4);
+      c.igniteT *= Math.exp(-dt * 2.4);
+      c.ignite = ema(c.ignite, c.igniteT, 0.15, 0.45);      // white border swells, no pop
+      // kick wave: target decays while the follower eases in (~0.22 s) and
+      // out (~0.6 s) → each wave is a ~1 s traveling envelope, never a jump
+      c.waveTarget *= Math.exp(-dt * 1.6);
+      c.waveAmp = ema(c.waveAmp, c.waveTarget, 0.22, 0.6);
       if (c.waveAmp > 0.01) {
         c.waveX += c.waveDir * dt * (1.5 + this.energy * 1.2);
-        c.waveAmp *= Math.exp(-dt * 1.1);
-        if (Math.abs(c.waveX) > c.width * 2.4) c.waveAmp = 0;
+        if (Math.abs(c.waveX) > c.width * 2.4) c.waveTarget = 0;  // fade off the edge
       }
     }
 
@@ -163,18 +200,23 @@ export class AuroraPreset {
       for (const c of this.curtains)
         if (c.amp > 0.1 && (!best || c.amp > best.amp)) best = c;
       if (best) {
-        best.waveDir = Math.random() < 0.5 ? 1 : -1;
-        best.waveX = -best.waveDir * best.width * 1.7;
-        best.waveAmp = 0.7 + kick * 0.9;
+        // only relaunch from the edge if no wave is mid-flight — resetting
+        // waveX on a live wave would teleport the bright spot
+        if (best.waveAmp < 0.15) {
+          best.waveDir = Math.random() < 0.5 ? 1 : -1;
+          best.waveX = -best.waveDir * best.width * 1.7;
+        }
+        best.waveTarget = Math.max(best.waveTarget,
+                                   Math.min(1.2, 0.55 + kick * 0.55));
       }
     }
-    // snare: short shimmer flicker across all rays
+    // snare: subtle shimmer — small target, eased follower (not a flash)
     if (snare > 0.55 && this.prevSnare <= 0.55)
-      this.flicker = Math.max(this.flicker, 0.45 + snare * 0.5);
+      this.flickerT = Math.max(this.flickerT, 0.22 + snare * 0.18);
     // drop: magnetospheric substorm — everything erupts, corona at zenith
     if (drop > 0.6 && this.prevDrop <= 0.6) {
-      this.substorm = 1;
-      this.corona = 1;
+      this.substormT = 1;
+      this.coronaT = 1;
       for (const c of this.curtains) {
         if (c.amp < 0.12 && c.target < 0.12) {
           c.x = this._placeX();
@@ -182,16 +224,15 @@ export class AuroraPreset {
           c.age = 0;
           c.width = 0.5 + Math.random() * 0.9;
         }
-        // the eruption is instant — curtains snap bright, then the envelope
-        // holds them while the substorm decays
-        c.amp = Math.max(c.amp, 0.7 + Math.random() * 0.25);
+        // eruption blooms over ~0.3 s (substorm-boosted attack in the
+        // envelope loop) instead of snapping bright in one frame
         c.target = 1.05 + Math.random() * 0.35;
         c.life = Math.max(c.life, 5 + Math.random() * 4);
-        c.ignite = Math.max(c.ignite, 0.5);
-        // traveling waves race along every curtain
+        c.igniteT = Math.max(c.igniteT, 0.5);
+        // traveling waves race along every curtain (eased in like kick waves)
         c.waveDir = Math.random() < 0.5 ? 1 : -1;
         c.waveX = -c.waveDir * c.width * 1.7;
-        c.waveAmp = 0.55 + Math.random() * 0.4;
+        c.waveTarget = Math.max(c.waveTarget, 0.55 + Math.random() * 0.4);
       }
     }
     this.prevKick = kick;
@@ -205,7 +246,7 @@ export class AuroraPreset {
                   0.85 + Math.random() * 0.25,
                   10 + Math.random() * 8,
                   { ignite: 1.0, width: 0.5 + Math.random() * 0.5 });
-      this.tapFlash = 1;
+      this.tapFlashT = 1;
     }
     this.prevTap = tapN;
 
@@ -224,15 +265,41 @@ export class AuroraPreset {
       }
     }
 
-    // global decays
-    this.substorm *= Math.exp(-dt * 0.45);   // calms over ~4-6 s
-    this.corona   *= Math.exp(-dt * 0.75);
-    this.flicker  *= Math.exp(-dt * 5.0);
-    this.tapFlash *= Math.exp(-dt * 4.0);
+    // global decays: targets decay, followers ease toward them (attack/release)
+    this.substormT *= Math.exp(-dt * 0.45);   // calms over ~4-6 s
+    this.coronaT   *= Math.exp(-dt * 0.75);
+    this.flickerT  *= Math.exp(-dt * 3.0);
+    this.tapFlashT *= Math.exp(-dt * 4.0);
+    this.substorm = ema(this.substorm, this.substormT, 0.25, 0.30);
+    this.corona   = ema(this.corona,   this.coronaT,   0.30, 0.35);
+    this.flicker  = ema(this.flicker,  this.flickerT,  0.12, 0.25);
+    this.tapFlash = ema(this.tapFlash, this.tapFlashT, 0.08, 0.30);
+
+    // ── Motion character (was computed per-pixel from raw bands in WGSL) ──
+    // Quiet baselines (0.14 / 0.30 / 0.40 / rate 1.0) match the shader's old
+    // constants exactly, so the approved quiet look is untouched. Amplitudes
+    // are slew-limited so a loud transient cannot yank a curtain.
+    const swayTgt = 0.14 + S.bass * (params.mulBass ?? 1) * 0.34 + this.substorm * 0.18;
+    this.swayAmp = slew(this.swayAmp, swayTgt, 0.30);
+    const foldTgt = 0.30 + S.mid * (params.mulMid ?? 1) * 0.55 + this.substorm * 0.25;
+    this.foldAmp = slew(this.foldAmp, foldTgt, 0.45);
+    const rayTgt = Math.min(1.15,
+      0.40 + S.high * (params.mulHigh ?? 1) * 0.50 + this.flicker * 0.45 + this.substorm * 0.35);
+    this.rayContr = slew(this.rayContr, rayTgt, 0.60);
+    // ray flicker: integrate a phase at a capped rate — the shader used
+    // u.time * rate, so any per-frame rate change scrambled the phase by
+    // rate_delta * elapsed_seconds (the main strobe source)
+    const flickRate = Math.min(5.5,
+      1.0 + S.high * (params.mulHigh ?? 1) * 3.5 + this.flicker * 2.0 + this.substorm * 2.0);
+    if (this.flickPhase === null) this.flickPhase = t;  // continuity with u.time
+    this.flickPhase += flickRate * dt;
 
     // low persistence — ray structure must stay crisp
     const alpha = 1 - 0.5 * PostFX.effTrail(params);
-    const u = buildUniforms(bands, timeMs, deltaMs, params, this.canvas, this.frameCount, alpha);
+    // the uniforms receive only the smoothed bands — never raw FFT frames
+    const smBands = { subBass: S.sub, bass: S.bass, mid: S.mid, high: S.high,
+                      kick: S.kick, snare: S.snare };
+    const u = buildUniforms(smBands, timeMs, deltaMs, params, this.canvas, this.frameCount, alpha);
     device.queue.writeBuffer(this.uniformBuffer, 0, u);
 
     // extra region upload — layout documented in aurora.wgsl header
@@ -254,6 +321,11 @@ export class AuroraPreset {
     d[51] = this.raise;
     d[52] = this.corona;
     d[53] = this.tapFlash;
+    d[54] = S.pulse;         // smoothed MIDI pulse (extra[13].z)
+    d[56] = this.swayAmp;    // extra[14]: slew-limited motion character
+    d[57] = this.foldAmp;
+    d[58] = this.flickPhase;
+    d[59] = this.rayContr;
     device.queue.writeBuffer(this.uniformBuffer, RIPPLE_OFFSET, d);
   }
 
