@@ -26,6 +26,7 @@ import { AcidPreset }         from './presets/acid.js';
 import { PrismPreset }        from './presets/prism.js';
 import { FxPreset }           from './presets/fx.js';
 import { TypePreset }         from './presets/type.js';
+import { PhysarumPreset }     from './presets/physarum.js';
 import { WledSync }           from './wled.js';
 import { GestureControl }     from './gesture.js';
 import posthogLib from 'posthog-js';
@@ -768,6 +769,7 @@ async function init() {
     prism:        PrismPreset,
     fx:           FxPreset,
     type:         TypePreset,
+    physarum:     PhysarumPreset,
   };
   const modeSelect = document.getElementById('mode-select');
 
@@ -793,10 +795,10 @@ async function init() {
   }
   window.__setMode = setMode;   // tests + AutoVJ preset rotation
 
-  // Tap the canvas: CYMATICS gets a physical plate strike; every other
-  // mode gets a light universal punch so a tap always answers back
+  // Tap the canvas: CYMATICS gets a plate strike, PHYSARUM gets a food
+  // drop (same UV fields); every other mode gets a light universal punch
   canvas.addEventListener('pointerdown', (e) => {
-    if (currentMode === 'cymatics') {
+    if (currentMode === 'cymatics' || currentMode === 'physarum') {
       const r = canvas.getBoundingClientRect();
       params.cymTapX = (e.clientX - r.left) / r.width;
       params.cymTapY = (e.clientY - r.top) / r.height;
@@ -1002,7 +1004,7 @@ async function init() {
   // (drops sometimes, every 16 phrases otherwise). Backs off for 45 s after
   // a manual pick so the user always wins.
   // city/galaxy join the pool once their presets land (stubs render black)
-  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism', 'type'];   // fx needs media — manual only
+  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism', 'type', 'physarum'];   // fx needs media — manual only
   let _phrasesSincePreset = 0;
 
   function rotatePreset(style) {
