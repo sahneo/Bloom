@@ -1,16 +1,18 @@
-// PYRO ember compute — spark particles rising from the fire on turbulent
-// paths, cooling from white-hot to dull red as they climb. Fully GPU-resident:
-// dead particles respawn stochastically from per-category emission rates so
-// the CPU only writes envelopes.
+// PYRO ember compute — embers LEAK from the upper flame body continuously
+// (rate follows flame intensity), rise on buoyant turbulent paths with
+// per-ember drag, swirl in slow vortices, and cool white → orange → dull red
+// → dark over seconds. Kicks add a modest extra puff out of the flame top —
+// never a radial starburst. Fully GPU-resident: dead particles respawn
+// stochastically from per-category emission rates; the CPU only writes
+// envelopes.
 //
 // Extra region slots (see pyro.wgsl header for the full map):
 //   extra[0] = (height, width, lean, roar)
-//   extra[2] = (tapX, tapY, tapEnv, tapAge)   → tap shower spawns
+//   extra[2] = (tapX, tapY, tapEnv, tapAge)   → tap ember trickle
 //   extra[3] = (rBase, rBurst, rSide, sideDir)
-//   extra[4] = (popEnv, popX, 0, 0)           → quiet pop fountains
+//   extra[4] = (popEnv, popX, glow, 0)        → quiet pop fountains
 //
-// Rates are "respawn probability per dead particle per second" — with a
-// mostly-dead pool of N=4096 an rBase of 0.05 ≈ 150–200 embers/s.
+// Rates are "respawn probability per dead particle per second".
 
 struct Uniforms {
   time:       f32, sub_bass:    f32, bass:      f32, mid:       f32,
@@ -27,7 +29,7 @@ struct Uniforms {
   extra: array<vec4f, 16>,
 }
 
-// kind: 0 base drift, 1 kick/drop burst, 2 snare crackle, 3 tap shower, 4 pop
+// kind: 0 flame-top leak, 1 kick puff, 2 snare crackle, 3 tap trickle, 4 pop
 struct Ember {
   pos:  vec2f,
   vel:  vec2f,
@@ -65,75 +67,83 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3u) {
   let i = gid.x;
   if (i >= arrayLength(&embers)) { return; }
   var e = embers[i];
-  let dt   = u.delta;
-  let asp  = u.res_x / max(u.res_y, 1.0);
-  let lean = u.extra[0].z;
-  let roar = u.extra[0].w;
+  let dt     = u.delta;
+  let asp    = u.res_x / max(u.res_y, 1.0);
+  let height = max(u.extra[0].x, 0.06);
+  let width  = max(u.extra[0].y, 0.10);
+  let lean   = u.extra[0].z;
+  let roar   = u.extra[0].w;
 
   if (e.life > 0.0) {
-    // turbulent buoyant flight: hotter embers rise faster
-    let t1 = noise2(e.pos * 2.4 + vec2f(u.time * 0.70, e.seed * 9.1));
-    let t2 = noise2(e.pos * 2.4 + vec2f(e.seed * 5.3, u.time * 0.66 + 31.7));
-    let turb = vec2f(t1 - 0.5, t2 - 0.5) * (1.7 + roar * 1.6);
-    let buoy = vec2f(lean * 0.55, 0.40 + e.heat * 1.15);
-    e.vel += (buoy + turb) * dt;
-    e.vel *= exp(-dt * 1.6);
+    // buoyant turbulent flight — hotter embers rise faster, cool ones drift
+    let t1 = noise2(e.pos * 2.1 + vec2f(u.time * 0.55, e.seed * 9.1));
+    let t2 = noise2(e.pos * 2.1 + vec2f(e.seed * 5.3, u.time * 0.52 + 31.7));
+    let turb = vec2f(t1 - 0.5, t2 - 0.5) * (1.1 + roar * 1.0);
+    // slow vortex swirl: perpendicular flow whose strength wanders per ember
+    let sw = (noise2(e.pos * 0.9 + vec2f(u.time * 0.14, e.seed * 3.3)) - 0.5) * 2.0;
+    let swirl = vec2f(-(t2 - 0.5), t1 - 0.5) * sw * 0.9;
+    let buoy = vec2f(lean * 0.45, 0.22 + e.heat * 0.85);
+    e.vel += (buoy + turb + swirl) * dt;
+    // per-ember drag: cooled embers lose momentum and get carried by the air
+    e.vel *= exp(-dt * (1.1 + (1.0 - clamp(e.heat, 0.0, 1.0)) * 1.4));
     e.pos += e.vel * dt;
-    // cooling: white-hot → dull red; crackle/tap sparks burn out fast
-    let coolRate = select(0.62, 1.5, e.kind > 1.5 && e.kind < 3.5);
+    // slow cooling: white → orange → dull red → dark; crackle burns out fast
+    let coolRate = select(0.55, 1.25, e.kind > 1.5 && e.kind < 3.5);
     e.heat *= exp(-dt * coolRate);
     e.life -= dt;
     if (e.pos.y > 1.15 || abs(e.pos.x) > asp + 0.25 || e.pos.y < -1.1) { e.life = 0.0; }
   } else {
     let fs     = u32(u.frame);
     let rates  = u.extra[3];              // rBase, rBurst, rSide, sideDir
-    let rTap   = u.extra[2].z * 1.1;
-    let rPop   = u.extra[4].x * 1.4;
+    let rTap   = u.extra[2].z * 0.18;
+    let rPop   = u.extra[4].x * 0.9;
     let total  = rates.x + rates.y + rates.z + rTap + rPop;
     if (rnd(i, fs * 2u + 1u) < total * dt) {
       let h1 = rnd(i, fs * 3u + 7u);
       let h2 = rnd(i, fs * 5u + 11u);
       let h3 = rnd(i, fs * 7u + 13u);
       let h4 = rnd(i, fs * 11u + 17u);
-      let pick   = h1 * total;
-      let width  = u.extra[0].y;
+      let pick = h1 * total;
       e.seed = h4 * 10.0 + 1.0;
       if (pick < rates.x) {
-        // base: slow drifting ember out of the flame
+        // leak from the upper flame body: born where the tongues tear off
         e.kind = 0.0;
-        e.pos  = vec2f((h2 - 0.5) * width * 1.7, -1.0 + h3 * 0.15);
-        e.vel  = vec2f((h4 - 0.5) * 0.25, 0.25 + h2 * 0.55);
-        e.life = 1.6 + h3 * 2.4;
-        e.heat = 0.55 + h3 * 0.35;
+        let yr = 0.35 + h3 * 0.55;                    // fraction of flame height
+        let y  = -1.0 + height * yr;
+        let wAt = width * (1.0 - min(yr, 1.1) * 0.40);
+        e.pos  = vec2f((h2 - 0.5) * wAt * 1.5 + lean * (y + 1.0) * (y + 1.0) * 0.45, y);
+        e.vel  = vec2f((h4 - 0.5) * 0.14, 0.10 + h2 * 0.22);
+        e.life = 2.0 + h3 * 2.4;
+        e.heat = 0.70 + h3 * 0.30;
       } else if (pick < rates.x + rates.y) {
-        // kick / drop burst: fast white-hot column
+        // kick puff: a modest extra breath of embers out of the flame top
         e.kind = 1.0;
-        e.pos  = vec2f((h2 - 0.5) * width * 1.3, -0.98 + h3 * 0.10);
-        e.vel  = vec2f((h4 - 0.5) * 0.9, 0.9 + h2 * 1.3);
-        e.life = 1.0 + h3 * 1.4;
+        let yr = 0.65 + h3 * 0.45;
+        let y  = -1.0 + height * yr;
+        e.pos  = vec2f((h2 - 0.5) * width * 1.1 + lean * (y + 1.0) * (y + 1.0) * 0.45, y);
+        e.vel  = vec2f((h4 - 0.5) * 0.30, 0.35 + h2 * 0.45);
+        e.life = 1.8 + h3 * 1.8;
         e.heat = 0.85 + h3 * 0.15;
       } else if (pick < rates.x + rates.y + rates.z) {
-        // snare crackle: short-lived sideways sparks
+        // snare crackle: a few short-lived sparks nudged sideways
         e.kind = 2.0;
-        e.pos  = vec2f((h2 - 0.5) * width * 0.9, -0.95 + h3 * 0.35);
-        e.vel  = vec2f(rates.w * (0.9 + h4 * 1.5), 0.25 + h2 * 0.7);
-        e.life = 0.45 + h3 * 0.6;
-        e.heat = 1.0;
-      } else if (pick < rates.x + rates.y + rates.z + rTap) {
-        // thrown fuel: radial shower at the tap point
-        e.kind = 3.0;
-        let a  = h2 * 6.2831853;
-        let r  = h3 * 0.12;
-        e.pos  = vec2f(u.extra[2].x, u.extra[2].y) + vec2f(cos(a), sin(a)) * r;
-        e.vel  = vec2f(cos(a) * (0.3 + h4 * 0.6), abs(sin(a)) * 0.6 + 0.4);
-        e.life = 0.5 + h3 * 0.9;
+        e.pos  = vec2f((h2 - 0.5) * width * 0.9, -0.95 + h3 * height * 0.5);
+        e.vel  = vec2f(rates.w * (0.30 + h4 * 0.55), 0.22 + h2 * 0.45);
+        e.life = 0.7 + h3 * 0.8;
         e.heat = 0.95;
+      } else if (pick < rates.x + rates.y + rates.z + rTap) {
+        // thrown fuel: embers trickle upward from the burn site
+        e.kind = 3.0;
+        e.pos  = vec2f(u.extra[2].x + (h2 - 0.5) * 0.22, u.extra[2].y + (h3 - 0.5) * 0.14);
+        e.vel  = vec2f((h4 - 0.5) * 0.30, 0.22 + h2 * 0.40);
+        e.life = 1.4 + h3 * 1.8;
+        e.heat = 0.90;
       } else {
-        // quiet pop: small fountain out of the coal bed
+        // quiet pop: a soft little fountain out of the coal bed
         e.kind = 4.0;
         e.pos  = vec2f(u.extra[4].y + (h2 - 0.5) * 0.06, -0.96);
-        e.vel  = vec2f((h4 - 0.5) * 0.7, 0.7 + h2 * 0.9);
-        e.life = 0.9 + h3 * 1.2;
+        e.vel  = vec2f((h4 - 0.5) * 0.40, 0.45 + h2 * 0.55);
+        e.life = 1.4 + h3 * 1.6;
         e.heat = 1.0;
       }
     }

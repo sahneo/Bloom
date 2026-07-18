@@ -6,21 +6,32 @@ import { buildUniforms, UNIFORM_SIZE, RIPPLE_OFFSET } from './uniforms.js';
 
 // PYRO — a living bonfire rising from the bottom of a black frame.
 //
-// The fullscreen shader (pyro.wgsl) is the flame body + coal bed + smoke;
-// a GPU-resident particle system (pyro_ember_*.wgsl) is the spark column.
-// This side owns the fire choreography:
-//   bass   → flame height/volume (fast attack, slow release)
-//   kick   → upward surge + a burst of embers
-//   snare  → sideways crackle sparks
-//   high   → faster lick flicker
+// The fullscreen shader (pyro.wgsl) is the volumetric flame body (3 advected
+// layers) + coal bed + lit smoke; a GPU-resident particle system
+// (pyro_ember_*.wgsl) is the ember drift. This side owns the fire
+// choreography, and its cardinal rule is SMOOTHNESS: the flame's own
+// turbulence supplies all the fast motion — audio only modulates it slowly.
+//   bass   → flame height/volume (EMA ~0.15s attack / ~1.2s release + slew)
+//   kick   → eased surge envelope (~0.6s) + a modest extra ember puff
+//   snare  → a few sideways crackle sparks (eased)
+//   high   → advection flicker (EMA'd)
 //   tension→ the fire leans harder and roars taller
-//   drop   → flashover: white-hot wall engulfs the frame, then collapses
+//   drop   → flashover: eased white wall engulfs the frame, then collapses
 //   quiet  → flames die to a breathing coal bed with occasional pops
-//   tap    → fuel thrown at that point: local burst + ember shower
+//   tap    → fuel thrown at that point: local burn + ember trickle
 //   hands  → (gestMode 2) palm bends the flames toward the hand
 // All envelopes are dt-scaled. Extra-region slot map lives in pyro.wgsl.
 
 const N_EMBERS = 4096;
+
+// asymmetric EMA helper: fast attack, slow release (time constants in s)
+function ema(cur, target, dt, tauA, tauR) {
+  return cur + (target - cur) * (1 - Math.exp(-dt / (target > cur ? tauA : tauR)));
+}
+// slew limiter: max units/s up and down
+function slew(cur, target, dt, up, dn) {
+  return cur + Math.max(-dn * dt, Math.min(up * dt, target - cur));
+}
 
 export class PyroPreset {
   constructor() {
@@ -28,17 +39,23 @@ export class PyroPreset {
     this._params    = null;
     this._extra     = new Float32Array(64);
 
-    // smoothed music state
+    // smoothed music state (all EMA'd — raw bands never reach the shader)
     this._bassSm = 0;
     this._highSm = 0;
     this._energy = 0.3;
+    this._glow   = 0.3;   // light-spill envelope — light inertia
 
-    // event envelopes
-    this._surge = 0;      // kick → flame jumps up
-    this._burst = 0;      // kick/drop → ember emission spike
-    this._side  = 0;      // snare → sideways crackle
+    // slew-limited body
+    this._height = 0.45;
+    this._width  = 0.35;
+
+    // event envelopes: two-stage (peak decays slowly, env chases peak)
+    // so every hit is an eased swell, never a frame-step jump
+    this._surge = 0; this._surgePk = 0;   // kick → flame swells up
+    this._burst = 0; this._burstPk = 0;   // kick/drop → ember emission
+    this._side  = 0; this._sidePk  = 0;   // snare → sideways crackle
+    this._fo    = 0; this._foPk    = 0;   // drop flashover
     this._sideDir = 1;
-    this._fo    = 0;      // drop flashover
     this._quiet = 0;      // sustained silence 0..1
     this._pop   = 0;      // coal pop during quiet
     this._popX  = 0;
@@ -157,47 +174,56 @@ export class PyroPreset {
     const drop  = params.dropPulse ?? 0;
     const tension = params.tension ?? 0;
 
-    // bass → body: fast attack, slow release so the fire "holds" its size
+    // every band input is EMA'd: ~0.15s attack, ~1s release — the fire
+    // breathes with the music instead of twitching with it
     const bass = (bands.bass ?? 0) * 0.75 + (bands.subBass ?? 0) * 0.25;
-    this._bassSm += (bass - this._bassSm)
-                  * (1 - Math.exp(-dt / (bass > this._bassSm ? 0.09 : 0.45)));
-    this._highSm += ((bands.high ?? 0) - this._highSm) * (1 - Math.exp(-dt / 0.15));
+    this._bassSm = ema(this._bassSm, bass,            dt, 0.15, 1.2);
+    this._highSm = ema(this._highSm, bands.high ?? 0, dt, 0.15, 0.9);
     const eTarget = ((bands.bass ?? 0) + (bands.mid ?? 0) + (bands.high ?? 0)) / 3;
-    this._energy += (eTarget - this._energy) * (1 - Math.exp(-dt / 1.0));
+    this._energy += (eTarget - this._energy) * (1 - Math.exp(-dt / 1.5));
 
     // sustained silence → the fire dies down to breathing coals
     const qT = this._energy < 0.05 ? 1 : 0;
     this._quiet += (qT - this._quiet)
-                 * (1 - Math.exp(-dt / (qT > this._quiet ? 2.2 : 0.5)));
+                 * (1 - Math.exp(-dt / (qT > this._quiet ? 2.2 : 0.8)));
 
-    // kick → surge upward + ember burst
+    // kick → surge: sets a slowly-decaying peak; the visible envelope eases
+    // toward it (attack ~0.13s, gone in ~0.6s) — a swell, not a jump
     if (kick > 0.45 && this._prevKick <= 0.35) {
-      this._surge = Math.max(this._surge, 0.45 + kick * 0.55);
-      this._burst = Math.max(this._burst, 0.5 + kick * 0.5);
+      this._surgePk = Math.max(this._surgePk, 0.30 + kick * 0.35);
+      this._burstPk = Math.max(this._burstPk, 0.22 + kick * 0.28);
     }
     this._prevKick = kick;
 
-    // snare → sideways crackle sparks
+    // snare → a gentle sideways crackle
     if (snare > 0.4 && this._prevSnare <= 0.32) {
-      this._side = Math.max(this._side, 0.5 + snare * 0.5);
+      this._sidePk  = Math.max(this._sidePk, 0.30 + snare * 0.35);
       this._sideDir = Math.random() < 0.5 ? -1 : 1;
     }
     this._prevSnare = snare;
 
-    // drop → flashover + massive ember wall
+    // drop → flashover (eased attack ~0.18s) + a strong-but-soft ember wave
     if (drop > 0.6 && this._prevDrop <= 0.6) {
-      this._fo    = 1;
-      this._burst = Math.max(this._burst, 3);
-      this._surge = Math.max(this._surge, 1.2);
+      this._foPk    = 1;
+      this._burstPk = Math.max(this._burstPk, 1.2);
+      this._surgePk = Math.max(this._surgePk, 0.9);
     }
     this._prevDrop = drop;
 
-    // dt-scaled decays
-    this._surge *= Math.exp(-dt * 4.5);
-    this._burst *= Math.exp(-dt * 7);
-    this._side  *= Math.exp(-dt * 8);
-    this._fo    *= Math.exp(-dt * 1.15);   // engulf ~1 s, then collapse
+    // two-stage envelopes: peak decays, visible env chases it (eased both ways)
+    this._surgePk *= Math.exp(-dt / 0.35);
+    this._burstPk *= Math.exp(-dt / 0.30);
+    this._sidePk  *= Math.exp(-dt / 0.28);
+    this._foPk    *= Math.exp(-dt * 1.15);   // engulf ~1 s, then collapse
+    this._surge += (this._surgePk - this._surge) * (1 - Math.exp(-dt / 0.13));
+    this._burst += (this._burstPk - this._burst) * (1 - Math.exp(-dt / 0.10));
+    this._side  += (this._sidePk  - this._side)  * (1 - Math.exp(-dt / 0.09));
+    this._fo    += (this._foPk    - this._fo)    * (1 - Math.exp(-dt / 0.18));
     this._pop   *= Math.exp(-dt * 5.5);
+
+    // light spill follows overall fire intensity with heavy inertia (~0.7s)
+    const gTarget = 0.20 + this._energy * 0.9 + this._surge * 0.35 + this._fo * 0.8;
+    this._glow += (gTarget - this._glow) * (1 - Math.exp(-dt / 0.7));
 
     // occasional coal pops while quiet
     if (this._quiet > 0.5) {
@@ -248,19 +274,23 @@ export class PyroPreset {
     this._tapAge += dt;
     this._tapEnv *= Math.exp(-dt * 1.6);   // burns out over ~1.5 s
 
-    // ── flame body params ─────────────────────────────────────────────────
+    // ── flame body params: EMA'd inputs + slew limit = no frame jumps ────
     const tension = params.tension ?? 0;
-    const height = (0.30 + this._bassSm * 0.95 + tension * 0.40 + this._surge * 0.50)
-                 * (1 - this._quiet * 0.72) + 0.08;
-    const width  = (0.34 + this._bassSm * 0.28 + this._surge * 0.10)
-                 * (1 - this._quiet * 0.5);
-    const roar    = Math.min(1.5, tension * 0.8 + this._surge * 0.6 + this._fo);
-    const flicker = this._highSm * 2.4;
+    const hTarget = (0.42 + this._bassSm * 0.95 + tension * 0.38 + this._surge * 0.45)
+                  * (1 - this._quiet * 0.70) + 0.10;
+    const wTarget = (0.34 + this._bassSm * 0.26 + this._surge * 0.08)
+                  * (1 - this._quiet * 0.5);
+    this._height = slew(this._height, hTarget, dt, 0.80, 0.45);
+    this._width  = slew(this._width,  wTarget, dt, 0.50, 0.30);
+    const roar    = Math.min(1.2, tension * 0.7 + this._surge * 0.5 + this._fo * 0.9);
+    const flicker = this._highSm * 1.1;
 
-    // ember emission (respawn prob per dead particle per second)
-    const rBase  = (0.012 + this._energy * 0.10) * (1 - this._quiet * 0.8) + 0.004;
-    const rBurst = this._burst * 0.9;
-    const rSide  = this._side * 0.7;
+    // ember emission: a continuous leak scaled by flame intensity —
+    // fewer, larger, softer sparks (render pass draws them as soft motes)
+    const rBase  = (0.002 + this._energy * 0.014 + this._bassSm * 0.006)
+                 * (1 - this._quiet * 0.8) + 0.001;
+    const rBurst = this._burst * 0.35;
+    const rSide  = this._side * 0.30;
 
     // Persistence LOW — flames must stay crisp; embers keep short hot streaks
     const alpha = 1 - 0.45 * PostFX.effTrail(params);
@@ -268,12 +298,17 @@ export class PyroPreset {
     device.queue.writeBuffer(this.uniformBuffer, 0, u);
 
     const e = this._extra;
-    e[0]  = height;        e[1]  = width;         e[2]  = this._lean;   e[3]  = roar;
+    e[0]  = this._height;  e[1]  = this._width;   e[2]  = this._lean;   e[3]  = roar;
     e[4]  = flicker;       e[5]  = this._surge;   e[6]  = this._fo;     e[7]  = this._quiet;
     e[8]  = this._tapX;    e[9]  = this._tapY;    e[10] = this._tapEnv; e[11] = this._tapAge;
     e[12] = rBase;         e[13] = rBurst;        e[14] = rSide;        e[15] = this._sideDir;
-    e[16] = this._pop;     e[17] = this._popX;    e[18] = 0;            e[19] = 0;
+    e[16] = this._pop;     e[17] = this._popX;    e[18] = this._glow;   e[19] = 0;
     device.queue.writeBuffer(this.uniformBuffer, RIPPLE_OFFSET, e);
+    if (typeof window !== 'undefined' && window.__pyroDebug) {
+      window.__pyroDbg = { height: this._height, width: this._width, fo: this._fo,
+        surge: this._surge, quiet: this._quiet, bassSm: this._bassSm,
+        energy: this._energy, glow: this._glow, roar, flicker, rBase };
+    }
 
     const enc  = device.createCommandEncoder();
     const pass = enc.beginComputePass();

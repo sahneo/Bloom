@@ -1,8 +1,9 @@
-// PYRO ember render — tiny additive quads. Fresh embers are white-hot and
-// sit well above the bloom threshold; as heat decays they fall down the same
-// blackbody ramp as the flame (white → yellow → orange → dull red) and fade
-// out. Subtle key-hue tint creeps into the cool tail only — the hot end
-// stays physically warm.
+// PYRO ember render — soft additive gaussian sparks. Fresh embers glow
+// yellow-white just over the bloom threshold; as heat decays they slide down
+// the same blackbody ramp as the flame (yellow → orange → dull red) and
+// finally dim to near-dark before their life fades — like real embers
+// vanishing into the night. Larger, softer, dimmer than a "popper" spark:
+// no hard-edged confetti dots.
 
 struct Uniforms {
   time:       f32, sub_bass:    f32, bass:      f32, mid:       f32,
@@ -46,7 +47,7 @@ fn pcg(v: u32) -> u32 {
 fn fire_ramp(t: f32) -> vec3f {
   let x = clamp(t, 0.0, 1.0);
   var c = vec3f(pow(x, 0.55), pow(x, 1.85) * 0.88, pow(x, 4.8) * 0.68);
-  c += vec3f(0.58, 0.66, 0.66) * smoothstep(0.80, 1.0, x);
+  c += vec3f(0.58, 0.66, 0.66) * smoothstep(0.82, 1.0, x);
   return c;
 }
 
@@ -76,8 +77,8 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VSOut {
     return VSOut(vec4f(2e4, 2e4, 0.0, 1.0), c, 0.0, 0.0, hash);
   }
 
-  // ~2–4 px, hot embers slightly larger (world units: screen height = 2)
-  let size = (3.2 / u.res_y) * (0.7 + hash * 0.8) * (0.75 + e.heat * 0.55);
+  // ~5–9 px soft glows, hot embers a touch larger (screen height = 2 units)
+  let size = (9.0 / u.res_y) * (0.55 + hash * 0.90) * (0.55 + e.heat * 0.55);
   let clip = vec2f((e.pos.x + c.x * size) / asp, e.pos.y + c.y * size);
   return VSOut(vec4f(clip, 0.0, 1.0), c, e.heat, e.life, hash);
 }
@@ -86,19 +87,22 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VSOut {
 fn fs_main(in: VSOut) -> @location(0) vec4f {
   let d = length(in.local);
   if (d > 1.0) { discard; }
-  let edge = smoothstep(1.0, 0.15, d);
+  // pure gaussian falloff — a glowing mote, not a disc
+  let soft = exp(-d * d * 4.5) - exp(-4.5);
 
   let heat = clamp(in.heat, 0.0, 1.0);
-  // die-out fade + faint per-ember flicker
-  let lf = smoothstep(0.0, 0.30, in.life)
-         * (0.80 + 0.20 * sin(u.time * (9.0 + in.hash * 14.0) + in.hash * 40.0));
-  let b  = (0.20 + heat * heat * 4.4) * lf;
+  // die-out fade + gentle slow per-ember shimmer
+  let lf = smoothstep(0.0, 0.45, in.life)
+         * (0.88 + 0.12 * sin(u.time * (4.0 + in.hash * 6.0) + in.hash * 40.0));
+  // brightness follows heat³ — cooled embers dim to a barely-there dull red
+  // well before the frame top, like real sparks vanishing into the night
+  let b  = (0.04 + heat * heat * heat * 1.30) * lf;
 
-  var col = fire_ramp(0.15 + heat * 0.85);
+  var col = fire_ramp(0.10 + heat * 0.88);
   // keyHue: only the cooled tail picks up a subtle key tint
   let key = hsv2rgb(vec3f(u.key_hue, 0.55, 1.0));
   col = mix(col, key * dot(col, vec3f(0.35, 0.5, 0.15)), 0.18 * u.key_conf * (1.0 - heat));
 
-  let a = edge * b;
+  let a = soft * b;
   return vec4f(col * a, a * 0.04);   // premultiplied, one/one additive
 }
