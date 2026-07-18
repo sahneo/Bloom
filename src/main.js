@@ -30,8 +30,8 @@ import { PhysarumPreset }     from './presets/physarum.js';
 import { AuroraPreset }       from './presets/aurora.js';
 import { PyroPreset }         from './presets/pyro.js';
 import { FirefliesPreset }    from './presets/fireflies.js';
-import { MitosisPreset }      from './presets/mitosis.js';
 import { FrostPreset }        from './presets/frost.js';
+import { MedusaPreset }       from './presets/medusa.js';
 import { WledSync }           from './wled.js';
 import { GestureControl }     from './gesture.js';
 import posthogLib from 'posthog-js';
@@ -778,7 +778,7 @@ async function init() {
     aurora:       AuroraPreset,
     pyro:         PyroPreset,
     fireflies:    FirefliesPreset,
-    mitosis:      MitosisPreset,
+    medusa:       MedusaPreset,
     frost:        FrostPreset,
   };
   const modeSelect = document.getElementById('mode-select');
@@ -1014,7 +1014,7 @@ async function init() {
   // (drops sometimes, every 16 phrases otherwise). Backs off for 45 s after
   // a manual pick so the user always wins.
   // city/galaxy join the pool once their presets land (stubs render black)
-  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism', 'type', 'physarum', 'aurora', 'pyro', 'fireflies', 'mitosis', 'frost'];   // fx needs media — manual only
+  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism', 'type', 'physarum', 'aurora', 'pyro', 'fireflies', 'frost'];   // fx needs media — manual only
   let _phrasesSincePreset = 0;
 
   function rotatePreset(style) {
