@@ -1014,7 +1014,7 @@ async function init() {
   // (drops sometimes, every 16 phrases otherwise). Backs off for 45 s after
   // a manual pick so the user always wins.
   // city/galaxy join the pool once their presets land (stubs render black)
-  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism', 'type', 'physarum', 'aurora', 'pyro', 'fireflies', 'frost'];   // fx needs media — manual only
+  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism', 'type', 'physarum', 'aurora', 'pyro', 'fireflies', 'abyss', 'frost'];   // fx needs media — manual only
   let _phrasesSincePreset = 0;
 
   function rotatePreset(style) {
