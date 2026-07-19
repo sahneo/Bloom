@@ -28,7 +28,6 @@ import { FxPreset }           from './presets/fx.js';
 import { TypePreset }         from './presets/type.js';
 import { PhysarumPreset }     from './presets/physarum.js';
 import { AuroraPreset }       from './presets/aurora.js';
-import { PyroPreset }         from './presets/pyro.js';
 import { FirefliesPreset }    from './presets/fireflies.js';
 import { FrostPreset }        from './presets/frost.js';
 import { AbyssPreset }        from './presets/abyss.js';
@@ -776,7 +775,6 @@ async function init() {
     type:         TypePreset,
     physarum:     PhysarumPreset,
     aurora:       AuroraPreset,
-    pyro:         PyroPreset,
     fireflies:    FirefliesPreset,
     abyss:        AbyssPreset,
     frost:        FrostPreset,
@@ -1014,7 +1012,7 @@ async function init() {
   // (drops sometimes, every 16 phrases otherwise). Backs off for 45 s after
   // a manual pick so the user always wins.
   // city/galaxy join the pool once their presets land (stubs render black)
-  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism', 'type', 'physarum', 'aurora', 'pyro', 'fireflies', 'abyss', 'frost'];   // fx needs media — manual only
+  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism', 'type', 'physarum', 'aurora', 'fireflies', 'abyss', 'frost'];   // fx needs media — manual only
   let _phrasesSincePreset = 0;
 
   function rotatePreset(style) {
