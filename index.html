@@ -1101,6 +1101,14 @@
   <button id="btn-vj" class="active" title="Auto-VJ: rotates visual modes on musical events">VJ</button>
   <button id="btn-proj" title="Projector: open a clean output window for a second display">PROJ</button>
   <button id="btn-share" title="Copy a link that restores this exact look — mode + every dial">SHARE</button>
+  <button id="btn-hue" title="Lock the global palette to one hue — every mode follows it (click again to unlock)">HUE</button>
+  <select id="bank-select" title="Preset bank — pick a slot to recall it instantly">
+    <option selected disabled>BANK</option>
+    <option>S1 · —</option><option>S2 · —</option><option>S3 · —</option><option>S4 · —</option>
+    <option>S5 · —</option><option>S6 · —</option><option>S7 · —</option><option>S8 · —</option>
+  </select>
+  <button id="btn-bank-save" title="Save the current look into the selected bank slot">SAVE</button>
+  <input type="color" id="hue-lock-input" value="#00D9FF" style="display:none">
   <button id="btn-cam" title="Gesture control: hand pans, pinch zooms, swipe pops (webcam)">CAM</button>
   <input id="wled-host" type="text" placeholder="WLED IP" spellcheck="false"
          title="Address of your WLED device (e.g. 192.168.1.19)">
@@ -1221,6 +1229,11 @@
     <span class="tune-label">Timbre</span>
     <input type="range" id="sl-timbre" min="0" max="1" step="0.05" value="1">
     <span class="tune-val" id="v-timbre">1.00</span>
+  </div>
+  <div class="tune-row" title="Shift beat-locked visuals earlier to compensate audio capture latency">
+    <span class="tune-label">Sync ms</span>
+    <input type="range" id="sl-sync" min="-200" max="200" step="10" value="0">
+    <span class="tune-val" id="v-sync">0</span>
   </div>
   <div class="tune-divider"></div>
   <div class="tune-actions">

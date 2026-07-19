@@ -246,6 +246,13 @@ bindSlider('sl-dissonance',  'v-dissonance',  'dissonanceStrength');
 bindSlider('sl-trail',       'v-trail',       'trail');
 bindSlider('sl-glow',        'v-glow',        'glow');
 bindSlider('sl-timbre',      'v-timbre',      'timbreStrength');
+{
+  const sl = document.getElementById('sl-sync');
+  sl.addEventListener('input', () => {
+    params.syncMs = parseInt(sl.value, 10);
+    document.getElementById('v-sync').textContent = sl.value;
+  });
+}
 
 btnTune.addEventListener('click', () => {
   const hidden = tunePanel.classList.toggle('hidden');
@@ -1052,11 +1059,19 @@ async function init() {
   // a manual pick so the user always wins.
   // city/galaxy join the pool once their presets land (stubs render black)
   const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism', 'type', 'physarum', 'aurora', 'fireflies', 'abyss', 'frost'];   // fx needs media — manual only
+  // Dramaturgy: quiet passages get contemplative worlds, peaks get raw
+  // energy; build-ups never switch (the tension must resolve where it grew)
+  const VJ_CALM = ['abyss', 'fireflies', 'glass', 'silk', 'flora', 'physarum', 'aurora', 'frost', 'fluid'];
+  const VJ_PEAK = ['swarm', 'void', 'storm', 'particles', 'cymatics', 'terra', 'acid', 'prism', 'galaxy'];
   let _phrasesSincePreset = 0;
+  const _recentModes = [];
 
-  function rotatePreset(style) {
-    const options = VJ_PRESET_POOL.filter(m => m !== currentMode && MODES[m]);
+  function rotatePreset(style, pool = VJ_PRESET_POOL) {
+    let options = pool.filter(m => m !== currentMode && MODES[m] && !_recentModes.includes(m));
+    if (!options.length) options = pool.filter(m => m !== currentMode && MODES[m]);
     const next = options[(Math.random() * options.length) | 0];
+    _recentModes.push(next);
+    if (_recentModes.length > 4) _recentModes.shift();
     _phrasesSincePreset = 0;
     switchModeCinematic(next, style);
   }
@@ -1064,8 +1079,12 @@ async function init() {
   function autoRotate(st) {
     if (!autovj.enabled || _switching) return;
     if (performance.now() - lastManualModeMs < 45000) return;
-    if (st.onPhrase && ++_phrasesSincePreset >= 16) rotatePreset('fade');
-    else if (st.onDrop && Math.random() < 0.35) rotatePreset('flash');
+    if (st.state === 'build') return;                       // hold through the build
+    const pool = (st.state === 'quiet' || st.state === 'breakdown') ? VJ_CALM
+               : st.state === 'steady' && st.tension < 0.2  ? VJ_PRESET_POOL
+               : VJ_PEAK;
+    if (st.onPhrase && ++_phrasesSincePreset >= 16) rotatePreset('fade', pool);
+    else if (st.onDrop && Math.random() < 0.5) rotatePreset('flash', VJ_PEAK);
   }
   window.__autoRotate = { rotatePreset };   // test hook
 
@@ -1094,6 +1113,66 @@ async function init() {
     btnPal.textContent = PAL_NAMES[params.voidPalette];
     btnPal.classList.toggle('active', params.voidPalette > 0);
   });
+
+  // HUE lock: pick one hue, every mode's palette follows it (like ty-color:
+  // click opens the picker, click again while locked = release)
+  {
+    const btn = document.getElementById('btn-hue');
+    const inp = document.getElementById('hue-lock-input');
+    btn.addEventListener('click', () => {
+      if (params.hueLock != null) {
+        params.hueLock = null;
+        btn.classList.remove('active');
+        btn.style.background = '';
+        btn.style.borderColor = '';
+      } else inp.click();
+    });
+    inp.addEventListener('input', e => {
+      const hex = e.target.value;
+      const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255);
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+      let h = 0;
+      if (d > 0) {
+        if (mx === r)      h = ((g - b) / d + 6) % 6;
+        else if (mx === g) h = (b - r) / d + 2;
+        else               h = (r - g) / d + 4;
+      }
+      params.hueLock = h / 6;
+      btn.classList.add('active');
+      btn.style.background = hex + '4d';
+      btn.style.borderColor = hex + 'b3';
+      posthog.capture('hue_locked');
+    });
+  }
+
+  // Preset bank: 8 local slots (SHARE's snapshot format), instant recall
+  {
+    const sel = document.getElementById('bank-select');
+    const btnSave = document.getElementById('btn-bank-save');
+    let bank = [];
+    try { bank = JSON.parse(localStorage.getItem('bloom-bank') ?? '[]'); } catch (_) {}
+    function renderBank() {
+      for (let i = 0; i < 8; i++) {
+        const o = sel.options[i + 1];
+        o.textContent = bank[i] ? `S${i + 1} · ${bank[i].mode.toUpperCase()}` : `S${i + 1} · —`;
+      }
+    }
+    renderBank();
+    btnSave.addEventListener('click', () => {
+      const slot = sel.selectedIndex - 1;
+      if (slot < 0) { btnSave.textContent = 'PICK SLOT'; setTimeout(() => { btnSave.textContent = 'SAVE'; }, 1200); return; }
+      bank[slot] = snapshotPreset();
+      localStorage.setItem('bloom-bank', JSON.stringify(bank));
+      renderBank();
+      btnSave.textContent = 'SAVED';
+      setTimeout(() => { btnSave.textContent = 'SAVE'; }, 900);
+      posthog.capture('bank_saved', { slot });
+    });
+    sel.addEventListener('change', async () => {
+      const slot = sel.selectedIndex - 1;
+      if (slot >= 0 && bank[slot]) await applyPreset(bank[slot]);
+    });
+  }
 
   // Gesture control: webcam hand steers the composition (Motion Lab style)
   const clampNum = (v, a, b) => Math.min(Math.max(v, a), b);
@@ -1374,9 +1453,12 @@ async function init() {
 
     // Beat tracking on unmuted kick+snare+high (band mutes shouldn't kill tempo)
     beat.update(ts / 1000, rawBands.kick, rawBands.snare, rawBands.high, dtS);
-    params.beatT    = beat.beatT;
+    // SYNC: shift the beat grid forward so beat-locked visuals anticipate the
+    // audio path's capture latency (system audio arrives 50-150 ms late)
+    const syncBeats = (params.syncMs ?? 0) / 1000 / Math.max(beat.period, 0.2);
+    params.beatT    = beat.beatT + syncBeats;
     params.beatConf = beat.conf;
-    params.barPos   = beat.barPos();
+    params.barPos   = (beat.barPos() + syncBeats + 4) % 4;
     if (!bpmWidget.classList.contains('hidden')) updateBpmWidget();
 
     // Harmony: MIDI drives tonality when active; audio chromagram as fallback
@@ -1390,6 +1472,8 @@ async function init() {
     params.dissonance = harm.dissonance;
     params.keyHue     = harm.keyHue;
     params.keyConf    = harm.keyConf;
+    // HUE lock: one chosen hue overrides harmony for every mode's palette
+    if (params.hueLock != null) { params.keyHue = params.hueLock; params.keyConf = 1; }
 
     // Structure → AutoVJ → generative drift
     const st = structure.update(rawBands, beat, dtS);
