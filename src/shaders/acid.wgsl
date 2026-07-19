@@ -1,11 +1,23 @@
 // ACID — gradient-noise mode (мудборд neobjects/gradient-noise):
-// soft organic gradient fields under HEAVY film grain, in five rotating
-// looks: 0 acid blobs / 1 UV glow / 2 thermal posterize / 3 electric
-// veins / 4 ink swirl. The grain IS the identity of this mode.
+// a full-frame domain-warped acid smoke field under HEAVY film grain, in
+// five rotating looks: 0 acid riso / 1 UV glow / 2 thermal posterize /
+// 3 electric veins / 4 ink swirl. The grain IS the identity of this mode.
+// Four wobbly blobs act as gradient sources riding on top of the smoke.
+//
+// Sound → visual (all envelopes are EMA'd in JS, no raw-band twitch):
+//   bass   → the whole field breathes: billows swell + densify
+//   kick   → a brightness/turbulence ring rolls out through the smoke
+//   mid    → flow speed (flowT, integrated in JS) + warp depth
+//   snare  → grain surge + brief colour shimmer
+//   tension→ colours saturate, field coils tighter
+//   drop   → look slam + full-frame invert/flash
 //
 // extra[0..3] = blobs (x, y, radius, brightness)
-// extra[8]    = colour A (rgb), extra[9] = colour B, extra[10] = background
-// extra[7]    = (look, grain, kickEnv, -)
+// extra[7]    = (look, grain, kickEnv, dropFlash)
+// extra[8]    = colour A rgb + bassEnv
+// extra[9]    = colour B rgb + midEnv
+// extra[10]   = background rgb + snareEnv
+// extra[11]   = (kickAge, flowT, -, -)
 
 struct Uniforms {
   time:       f32, sub_bass:    f32, bass:      f32, mid:       f32,
@@ -90,11 +102,15 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
   let aspect = u.res_x / max(u.res_y, 1.0);
   let wp = vec2f((in.uv.x - 0.5) * 2.0 * aspect, (0.5 - in.uv.y) * 2.0);
 
-  let P = u.extra[7];               // look, grain, kickEnv
-  let look = i32(P.x + 0.5);
-  let colA = u.extra[8].rgb;
-  let colB = u.extra[9].rgb;
-  let bg   = u.extra[10].rgb;
+  let P     = u.extra[7];             // look, grain, kickEnv, dropFlash
+  let look  = i32(P.x + 0.5);
+  let kickE = P.z;
+  let flash = P.w;
+  let colA   = u.extra[8].rgb;  let bassE  = u.extra[8].w;
+  let colB   = u.extra[9].rgb;  let midE   = u.extra[9].w;
+  let bg     = u.extra[10].rgb; let snareE = u.extra[10].w;
+  let kickAge = u.extra[11].x;
+  let flowT   = u.extra[11].y;
 
   let f0 = blobI(wp, 0);
   let f1 = blobI(wp, 1);
@@ -102,47 +118,75 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
   let f3 = blobI(wp, 3);
   let ft = clamp(f0 + f1 + f2 + f3, 0.0, 2.0);
 
+  // kick: a turbulence/brightness ring rolls out from the centre
+  let ring = kickE * exp(-pow(length(wp) - kickAge * 2.6, 2.0) * 5.0);
+
+  // bass breathes the whole field (billows swell); tension coils it tighter
+  let coil   = 1.0 + u.tension * 0.5;
+  let fscale = (1.6 - bassE * 0.5) * coil;
+
+  // mid drives flow speed (flowT integrated in JS) and warp depth
+  let warp = 0.9 + midE * 1.7 + ring * 0.8;
+  let q0 = wp * fscale + vec2f(flowT * 0.045, -flowT * 0.03);
+  let w1 = fbm(q0 + vec2f(ft * 0.5, -ft * 0.35));
+  let w2 = fbm(q0 * 1.55 + vec2f(w1 * warp * 1.8, w1 * warp * 1.4) + vec2f(3.7, 9.1));
+  let sm = clamp(w2 * 1.4 - 0.15 + ring * 0.3 + bassE * 0.12, 0.0, 1.0);
+
   var col = bg;
 
   if (look == 0) {
-    // acid blobs: two-colour amoebas, soft edged, riso feel
-    col = bg + colA * (f0 + f2) * 0.9 + colB * (f1 + f3) * 0.85;
+    // acid riso: two-colour smoke amoebas over the full frame
+    let a  = pow(sm, 1.35);
+    let b2 = pow(clamp(fbm(q0 * 1.9 + vec2f(-w1 * warp * 1.5, w1 * warp * 1.2)
+                           + vec2f(17.3, 4.9)) * 1.4 - 0.2 + ring * 0.25, 0.0, 1.0), 1.5);
+    col = bg + colA * (a * 0.85 + (f0 + f2) * 0.5)
+             + colB * (b2 * 0.8 + (f1 + f3) * 0.45);
   } else if (look == 1) {
-    // UV glow: one dominant airbrushed light on near-black
-    col = bg + colA * pow(clamp(ft * 0.75, 0.0, 1.0), 1.5) * 1.1
-             + colB * f1 * 0.35;
+    // UV glow: the smoke itself carries the airbrushed light, blobs intensify
+    let g = pow(sm, 1.9);
+    col = bg + colA * (g * (0.7 + ft * 0.6) + ring * 0.3) * 1.25
+             + colB * (pow(clamp(w1 * 1.3 - 0.25, 0.0, 1.0), 2.2) * 0.55 + f1 * 0.3);
   } else if (look == 2) {
-    // thermal: posterized heat map with dithered band edges
-    let x = clamp(ft * 0.62 + fbm(wp * 1.8 + vec2f(u.time * 0.05, 0.0)) * 0.18, 0.0, 1.0);
+    // thermal: posterized heat map over the whole frame, dithered band edges
+    let x = clamp(sm * 0.62 + ft * 0.28 + ring * 0.22, 0.0, 1.0);
     let N = 7.0;
     let d = (hash21(in.uv * u.res_x * 0.5) - 0.5) / N;   // dither the bands
-    col = thermal(floor((x + d) * N) / N);
-    col *= 0.9;
+    col = thermal(floor((x + d) * N) / N) * 0.92;
   } else if (look == 3) {
-    // electric veins: ridged filaments warped by the blob field
-    let q = wp * 2.2 + vec2f(ft * 1.3, -ft * 0.9) + vec2f(0.0, u.time * 0.05);
+    // electric veins riding the smoke field
+    let q = wp * 2.1 * coil + vec2f(sm * 1.5, -sm * 1.1) + vec2f(0.0, flowT * 0.04);
     let r1 = 1.0 - abs(fbm(q) * 2.0 - 1.0);
     let r2 = 1.0 - abs(fbm(q * 1.7 + vec2f(5.1, 2.3)) * 2.0 - 1.0);
     let vein = pow(max(r1 * r2, 1e-3), 5.0);
-    col = bg * (0.8 + fbm(wp * 6.0) * 0.4)
-        + colA * vein * (1.2 + u.mid * u.mul_mid * 2.2 + P.z * 1.5)
-        + colB * ft * 0.22;
+    col = bg * (0.6 + sm * 0.9)
+        + colA * vein * (1.1 + midE * 2.3 + ring * 2.0 + kickE * 0.7)
+        + colB * (ft * 0.22 + sm * 0.15);
   } else {
-    // ink swirl: monochrome smoke, domain-warped by the blobs
-    let w1 = fbm(wp * 1.6 + vec2f(u.time * 0.03, -u.time * 0.02) + vec2f(ft * 0.8));
-    let w2 = fbm(wp * 1.6 + vec2f(w1 * 2.1, w1 * 1.7) + vec2f(3.7, 9.1));
-    let smoke = pow(clamp(w2 * 1.35 - 0.18, 0.0, 1.0), 1.6);
-    col = bg + colA * smoke * (0.85 + ft * 0.5);
+    // ink swirl: monochrome smoke
+    let smoke = pow(sm, 1.55);
+    col = bg + colA * smoke * (0.85 + ft * 0.4 + ring * 0.4);
   }
 
-  // kick pulse: the whole print breathes
-  col *= 1.0 + P.z * 0.14;
+  // kick pulse: the ring brightens the smoke as it passes + a light thump
+  col *= 1.0 + ring * 0.5 + kickE * 0.07;
 
-  // ── the signature: heavy two-scale film grain ──────────────────────────
+  // tension: colours saturate toward the drop
+  let luma = dot(col, vec3f(0.299, 0.587, 0.114));
+  col = mix(vec3f(luma), col, 1.0 + u.tension * 0.55);
+
+  // snare: brief colour shimmer
+  col += (colA * 0.6 + colB * 0.4) * snareE * 0.12;
+
+  // drop slam: full-frame invert/flash while the look switches
+  let fl = clamp(flash, 0.0, 1.0);
+  col = mix(col, vec3f(1.1) - col * 0.85, fl * 0.85) + vec3f(fl * fl * 0.4);
+
+  // ── the signature: heavy two-scale film grain, surging on snare ────────
+  let gAmt = P.y * (1.0 + snareE * 1.1);
   let g1 = hash21(in.uv * u.res_x + vec2f(fract(u.time * 1.3) * 19.0));
   let g2 = vnoise(in.uv * u.res_x * 0.22 + vec2f(fract(u.time * 0.7) * 31.0));
-  col *= 1.0 + (g1 - 0.5) * P.y;
-  col += vec3f(g2 - 0.5) * P.y * 0.10;
+  col *= 1.0 + (g1 - 0.5) * gAmt;
+  col += vec3f(g2 - 0.5) * gAmt * 0.10;
 
   return vec4f(max(col, vec3f(0.0)), 1.0);
 }
