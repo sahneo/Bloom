@@ -32,6 +32,8 @@ import { FirefliesPreset }    from './presets/fireflies.js';
 import { FrostPreset }        from './presets/frost.js';
 import { AbyssPreset }        from './presets/abyss.js';
 import { KinoPreset, KINO_DIALS } from './presets/kino.js';
+import { BzPreset }           from './presets/bz.js';
+import { PendulumPreset }     from './presets/pendulum.js';
 import { WledSync }           from './wled.js';
 import { GestureControl }     from './gesture.js';
 import posthogLib from 'posthog-js';
@@ -786,6 +788,8 @@ async function init() {
     fireflies:    FirefliesPreset,
     abyss:        AbyssPreset,
     kino:         KinoPreset,
+    bz:           BzPreset,
+    pendulum:     PendulumPreset,
     frost:        FrostPreset,
   };
   const modeSelect = document.getElementById('mode-select');
