@@ -56,6 +56,9 @@ export class StructureAnalyzer {
     const ema = (cur, x, tauS) => cur + (x - cur) * Math.min(dtS / tauS, 1);
     this._fast     = ema(this._fast,     total,      0.35);
     this._slow     = ema(this._slow,     total,      10);
+    // spectral-flux novelty followers — texture change without a loudness jump
+    this._fluxFast = ema(this._fluxFast ?? 0, bands.flux ?? 0, 0.15);
+    this._fluxSlow = ema(this._fluxSlow ?? 0, bands.flux ?? 0, 6);
     this._bassFast = ema(this._bassFast, bass,       0.30);
     // Bass norm only tracks while bass is actually present. During a
     // breakdown the norm otherwise decays toward zero, and the first riser
@@ -81,7 +84,7 @@ export class StructureAnalyzer {
     const bassRel  = this._bassFast / bassNorm;
 
     // ── Breakdown: bass/kick pulled out while the track keeps playing ──
-    if (playing && bassRel < 0.45 && this._fast > 0.04) {
+    if (playing && bassRel < 0.45 && this._fast > 0.015) {
       this._bassLowMs += dtMs;
     } else {
       this._bassLowMs = Math.max(0, this._bassLowMs - dtMs * 2);
@@ -125,12 +128,18 @@ export class StructureAnalyzer {
     const energyJump = this._fast > this._slow * 1.30 && this._fast > 0.12;
     // After a deep breakdown the RETURN of bass to its norm IS the drop;
     // a build-up without a breakdown must instead punch clearly above norm.
+    // Spectral flux adds a second ear: a drop is also a texture TRANSFORM
+    // (new layers slam in), so novelty can vouch where loudness is flat.
+    const fluxJump = this._fluxFast > this._fluxSlow * 1.6 && this._fluxFast > 0.25;
     const bassBack = bassRel > (deepBreak ? 0.95 : 1.30);
-    const punch    = deepBreak ? slam : (energyJump && slam);
+    const punch    = deepBreak ? (slam || fluxJump) : ((energyJump || fluxJump) && slam);
     if (playing && primed && this._playMs > 12000
         && bassBack && bands.kick > 0.55 && punch
         && this._sinceDropMs > 15000 && this._dropPendingMs <= 0) {
       this._dropPendingMs = beat.conf > 0.4 ? beat.period * 1200 : 1;  // ≤1.2 beats
+      // magnitude: a deep breakdown resolved with both loudness and novelty
+      // is a MAJOR drop; anything less is minor (presets scale their drama)
+      this._dropStrength = (deepBreak && bassRel > 1.15 && (fluxJump || energyJump)) ? 1.0 : 0.7;
     }
     if (this._dropPendingMs > 0) {
       const phase   = beat.beatT % 1;
@@ -138,7 +147,7 @@ export class StructureAnalyzer {
       this._dropPendingMs -= dtMs;
       if (beat.conf < 0.4 || phase < 0.25 || wrapped || this._dropPendingMs <= 0) {
         this.onDrop      = true;
-        this.dropPulse   = 1;
+        this.dropPulse   = this._dropStrength ?? 1;
         this.tension     = Math.min(this.tension, 0.15);
         this._bassLowMs  = 0;
         this._tenseMs    = 0;

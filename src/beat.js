@@ -36,7 +36,9 @@ export class BeatTracker {
     this._prevK   = 0;
     this._prevS   = 0;
     this._prevH   = 0;
-    this._slotEnergy = new Float32Array(4);   // downbeat voting
+    this._slotEnergy = new Float32Array(4);   // downbeat voting: kick accents
+    this._slotSnare  = new Float32Array(4);   // backbeat voting: snares live on 2 & 4
+    this._slotFlux   = new Float32Array(4);   // novelty voting: arrangements change on "1"
     this._barOffset  = 0;
     this._lastAnalysis = 0;
     this._candPeriod   = 0;   // tempo-change hypothesis
@@ -82,7 +84,7 @@ export class BeatTracker {
   }
 
   // Call every frame with raw kick/snare/high envelopes (0..1), dt in seconds.
-  update(timeS, kick, snare, high, dt) {
+  update(timeS, kick, snare, high, dt, flux = 0) {
     // Onset strength = positive derivatives (transients, not sustained level).
     // High band (hats) is essential: with a half-time kick the quarter-note
     // grid lives ONLY in the hats — kick+snare alone honestly report half tempo.
@@ -94,10 +96,18 @@ export class BeatTracker {
     this._prevH = high;
     const strength = dK + dS * 0.8 + dH * 0.9;
 
-    // Downbeat voting: kick energy per beat slot within a 4-beat bar
-    if (dK > 0.15 && this.conf > 0.2) {
-      const slot = Math.floor(this.beatT % 4);
-      this._slotEnergy[slot] += dK;
+    // Downbeat voting — three independent ears, each votes onset mass into
+    // the NEAREST beat slot (floor() let early onsets vote one slot back):
+    //  · kick accents (works for breakbeat/hip-hop where "1" is heaviest;
+    //    harmless in four-on-the-floor where all slots tie)
+    //  · snare/clap backbeat — in most electronic music snares live on 2 & 4,
+    //    which pins the bar to within a 2-beat ambiguity
+    //  · spectral-flux novelty — arrangements change layers on "1"
+    if (this.conf > 0.2) {
+      const slot = ((Math.round(this.beatT) % 4) + 4) % 4;
+      if (dK > 0.15)   this._slotEnergy[slot] += dK;
+      if (dS > 0.12)   this._slotSnare[slot]  += dS;
+      if (flux > 0.55) this._slotFlux[slot]   += flux - 0.4;
     }
 
     // Resample into the 100 Hz ring (max within each 10 ms slot)
@@ -210,19 +220,27 @@ export class BeatTracker {
     }
     if (bestLag === 0) return;
 
-    // Downbeat: rotate bar so the strongest-kick slot becomes "1".
-    // Hysteresis: re-electing the downbeat every analysis made the bar dots
-    // hop around — a challenger slot must now beat the rest by 30% three
-    // analyses in a row before the bar rotates.
+    // Downbeat: score each candidate "1" by how well the evidence pattern
+    // fits it — kick accent ON the candidate, snares on its 2 & 4, novelty
+    // spikes ON it. This survives four-on-the-floor (where kick voting alone
+    // was a coin toss and the bar dots wandered).
+    // Hysteresis: a challenger must beat the runner-up by 25% three analyses
+    // in a row before the bar rotates.
+    const K = this._slotEnergy, S = this._slotSnare, F = this._slotFlux;
+    const normK = K[0] + K[1] + K[2] + K[3] + 1e-6;
+    const normS = S[0] + S[1] + S[2] + S[3] + 1e-6;
+    const normF = F[0] + F[1] + F[2] + F[3] + 1e-6;
+    const score = new Float32Array(4);
+    for (let d = 0; d < 4; d++) {
+      score[d] = (K[d] / normK) * 0.6
+               + ((S[(d + 1) % 4] + S[(d + 3) % 4]) / normS) * 1.0
+               + (F[d] / normF) * 1.2;
+    }
     let maxSlot = 0;
-    for (let i = 1; i < 4; i++) {
-      if (this._slotEnergy[i] > this._slotEnergy[maxSlot]) maxSlot = i;
-    }
+    for (let i = 1; i < 4; i++) if (score[i] > score[maxSlot]) maxSlot = i;
     let second = 0;
-    for (let i = 0; i < 4; i++) {
-      if (i !== maxSlot) second = Math.max(second, this._slotEnergy[i]);
-    }
-    if (maxSlot !== this._barOffset && this._slotEnergy[maxSlot] > second * 1.3) {
+    for (let i = 0; i < 4; i++) if (i !== maxSlot) second = Math.max(second, score[i]);
+    if (maxSlot !== this._barOffset && score[maxSlot] > second * 1.25) {
       if (maxSlot === this._barCand) this._barVotes = (this._barVotes ?? 0) + 1;
       else { this._barCand = maxSlot; this._barVotes = 1; }
       if (this._barVotes >= 3) {
@@ -232,7 +250,11 @@ export class BeatTracker {
     } else {
       this._barVotes = 0;
     }
-    for (let i = 0; i < 4; i++) this._slotEnergy[i] *= 0.6;   // slow forget
+    for (let i = 0; i < 4; i++) {                              // slow forget
+      this._slotEnergy[i] *= 0.6;
+      this._slotSnare[i]  *= 0.6;
+      this._slotFlux[i]   *= 0.6;
+    }
 
     // Parabolic interpolation around the peak → sub-bin (~ms) precision
     const y1 = ac[bestLag - 1], y2 = ac[bestLag], y3 = ac[bestLag + 1];

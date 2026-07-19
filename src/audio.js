@@ -14,6 +14,12 @@ export class AudioAnalyser {
     this.sharpness = 0;   // 0 = sine-soft timbre, 1 = saw-bright (spectral centroid)
     this._smoothed = { subBass: 0, bass: 0, mid: 0, high: 0 };
     this._maxEnergy = 0.001;
+    // Per-band AGC: each band normalizes against its own ceiling/floor so a
+    // bass-heavy master can't crush mids/highs (and vice versa)
+    this._agc = {
+      subBass: { max: 0.05, floor: 0 }, bass: { max: 0.05, floor: 0 },
+      mid:     { max: 0.05, floor: 0 }, high: { max: 0.05, floor: 0 },
+    };
     this._fileSource = null;
     // Transient detection
     this._kickBaseline  = 0;
@@ -276,7 +282,18 @@ export class AudioAnalyser {
 
     const energy = (raw.subBass + raw.bass + raw.mid + raw.high) / 4;
     this._maxEnergy = Math.max(this._maxEnergy * 0.998, energy + 0.001);
-    const gain = 1 / this._maxEnergy;
+
+    // Per-band AGC: ceiling follows each band's own peaks (~8 s memory),
+    // floor follows its quiet level (fast down, slow up), output spans the
+    // range between them. Quiet masters and loud masters land the same.
+    const agcNorm = (name, v) => {
+      const a = this._agc[name];
+      a.max = Math.max(a.max * 0.9985, v + 0.001);
+      if (v < a.floor) a.floor = a.floor * 0.9 + v * 0.1;
+      else             a.floor = Math.min(a.floor + (v - a.floor) * 0.0012, a.max * 0.5);
+      if (a.max < 0.03) return 0;                       // silence: don't amplify noise
+      return Math.min(Math.max((v - a.floor) / Math.max(a.max - a.floor, 0.02), 0), 1) * 0.92;
+    };
 
     this._kickBandMax  = Math.max(this._kickBandMax  * 0.999, raw.kickRaw     + 0.0005);
     this._kickHarmMax  = Math.max(this._kickHarmMax  * 0.999, raw.kickHarmRaw + 0.0005);
@@ -301,10 +318,10 @@ export class AudioAnalyser {
     const kickGate  = 1.0 - this._kick  * 0.85;
     const snareGate = 1.0 - this._snare * 0.70;
 
-    const nSubBass = Math.min(raw.subBass * gain, 1) * kickGate;
-    const nBass    = Math.min(raw.bass    * gain, 1) * kickGate;
-    const nMid     = Math.min(raw.mid     * gain, 1) * snareGate;
-    const nHigh    = Math.min(raw.high    * gain, 1);
+    const nSubBass = agcNorm('subBass', raw.subBass) * kickGate;
+    const nBass    = agcNorm('bass',    raw.bass)    * kickGate;
+    const nMid     = agcNorm('mid',     raw.mid)     * snareGate;
+    const nHigh    = agcNorm('high',    raw.high);
 
     this._smoothed.subBass = nSubBass > this._smoothed.subBass
       ? this._smoothed.subBass * 0.94 + nSubBass * 0.06
@@ -319,6 +336,22 @@ export class AudioAnalyser {
       : this._smoothed.mid * 0.75 + nMid * 0.25;
 
     this._smoothed.high = this._smoothed.high * 0.65 + nHigh * 0.35;
+
+    // ── Spectral flux: positive spectral change per frame (novelty) ─────
+    // Catches texture changes that loudness misses — a new synth entering,
+    // a filter opening, the mix transforming at a drop.
+    {
+      if (!this._prevSpec) this._prevSpec = new Float32Array(this.dataArray.length);
+      let flux = 0;
+      for (let i = 2; i < this.dataArray.length; i++) {
+        const v = this.dataArray[i] / 255;
+        const d = v - this._prevSpec[i];
+        if (d > 0) flux += d;
+        this._prevSpec[i] = v;
+      }
+      this._fluxMax = Math.max((this._fluxMax ?? 0.1) * 0.998, flux + 0.01);
+      this.flux = Math.min(flux / this._fluxMax, 1);
+    }
 
     // ── Timbre sharpness: spectral centroid of the tonal range ──────────
     // A saw wave spreads energy up its 1/n harmonic series → high centroid;
@@ -389,6 +422,7 @@ export class AudioAnalyser {
       high:    this._smoothed.high,
       kick:    this._kick,
       snare:   this._snare,
+      flux:    this.flux ?? 0,
     };
     return this.bands;
   }
@@ -399,6 +433,7 @@ export class AudioAnalyser {
     this.ranges = { ...DEFAULT_RANGES, ...(ranges ?? {}) };
     this._kickBandMax = this._kickHarmMax = this._snareBandMax = 0.001;
     this._maxEnergy = 0.001;
+    for (const a of Object.values(this._agc)) { a.max = 0.05; a.floor = 0; }
   }
 
   // ── Template training API ──────────────────────────────────────────

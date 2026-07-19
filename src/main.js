@@ -1062,10 +1062,10 @@ async function init() {
   // (drops sometimes, every 16 phrases otherwise). Backs off for 45 s after
   // a manual pick so the user always wins.
   // city/galaxy join the pool once their presets land (stubs render black)
-  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism', 'type', 'physarum', 'aurora', 'fireflies', 'abyss', 'frost'];   // fx needs media — manual only
+  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism', 'type', 'physarum', 'aurora', 'fireflies', 'abyss', 'frost', 'bz', 'pendulum'];   // fx needs media — manual only
   // Dramaturgy: quiet passages get contemplative worlds, peaks get raw
   // energy; build-ups never switch (the tension must resolve where it grew)
-  const VJ_CALM = ['abyss', 'fireflies', 'glass', 'silk', 'flora', 'physarum', 'aurora', 'frost', 'fluid'];
+  const VJ_CALM = ['abyss', 'fireflies', 'glass', 'silk', 'flora', 'physarum', 'aurora', 'frost', 'fluid', 'bz', 'pendulum'];
   const VJ_PEAK = ['swarm', 'void', 'storm', 'particles', 'cymatics', 'terra', 'acid', 'prism', 'galaxy'];
   let _phrasesSincePreset = 0;
   const _recentModes = [];
@@ -1436,8 +1436,8 @@ async function init() {
   function adaptDpr(ts, dtMs) {
     _frameEmaMs = _frameEmaMs * 0.95 + dtMs * 0.05;
     if (ts - _lastDprAdjust < 2000) return;
-    if (_frameEmaMs > 19 && dprCap > 1.0) {
-      dprCap = Math.max(1.0, dprCap - 0.25);
+    if (_frameEmaMs > 19 && dprCap > 0.6) {
+      dprCap = Math.max(0.6, dprCap - 0.25);
       _lastDprAdjust = ts;
       resize();
     } else if (_frameEmaMs < 13 && dprCap < 1.5 && ts - _lastDprAdjust > 10000) {
@@ -1456,7 +1456,7 @@ async function init() {
     const bands = applyBandMutes(rawBands);
 
     // Beat tracking on unmuted kick+snare+high (band mutes shouldn't kill tempo)
-    beat.update(ts / 1000, rawBands.kick, rawBands.snare, rawBands.high, dtS);
+    beat.update(ts / 1000, rawBands.kick, rawBands.snare, rawBands.high, dtS, rawBands.flux ?? 0);
     // SYNC: shift the beat grid forward so beat-locked visuals anticipate the
     // audio path's capture latency (system audio arrives 50-150 ms late)
     const syncBeats = (params.syncMs ?? 0) / 1000 / Math.max(beat.period, 0.2);
