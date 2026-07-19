@@ -1,157 +1,150 @@
-import flameSource   from '../shaders/pyro.wgsl?raw';
-import computeSource from '../shaders/pyro_ember_compute.wgsl?raw';
-import renderSource  from '../shaders/pyro_ember_render.wgsl?raw';
+import simSource         from '../shaders/pyro_sim.wgsl?raw';
+import renderSource      from '../shaders/pyro_render.wgsl?raw';
+import sparkSimSource    from '../shaders/pyro_spark_compute.wgsl?raw';
+import sparkRenderSource from '../shaders/pyro_spark_render.wgsl?raw';
 import { PostFX, ACCUM_FORMAT } from '../postfx.js';
 import { buildUniforms, UNIFORM_SIZE, RIPPLE_OFFSET } from './uniforms.js';
 
-// PYRO — a living bonfire rising from the bottom of a black frame.
+// PYRO — a real bonfire filmed at night.
 //
-// The fullscreen shader (pyro.wgsl) is the volumetric flame body (3 advected
-// layers) + coal bed + lit smoke; a GPU-resident particle system
-// (pyro_ember_*.wgsl) is the ember drift. This side owns the fire
-// choreography, and its cardinal rule is SMOOTHNESS: the flame's own
-// turbulence supplies all the fast motion — audio only modulates it slowly.
-//   bass   → flame height/volume (EMA ~0.15s attack / ~1.2s release + slew)
-//   kick   → eased surge envelope (~0.6s) + a modest extra ember puff
-//   snare  → a few sideways crackle sparks (eased)
-//   high   → advection flicker (EMA'd)
-//   tension→ the fire leans harder and roars taller
-//   drop   → flashover: eased white wall engulfs the frame, then collapses
-//   quiet  → flames die to a breathing coal bed with occasional pops
-//   tap    → fuel thrown at that point: local burn + ember trickle
-//   hands  → (gestMode 2) palm bends the flames toward the hand
-// All envelopes are dt-scaled. Extra-region slot map lives in pyro.wgsl.
+// v3: the flame is a genuine 2D fire SIMULATION on a half-res temperature
+// grid (ping-pong storage buffers, frost/physarum idiom) — semi-Lagrangian
+// advection with buoyancy + curl-noise churn, noise-shredded cooling, and a
+// bed of wandering hot spots injecting heat at the base. The churning,
+// licking, tearing motion comes out of the sim itself: no scrolling noise
+// layers (v2's banding), no point-sprite embers (v2's glitter). Sparks are
+// sim-seeded particles rendered as velocity-stretched streaks.
+//
+// Music mapping (all EMA'd / eased — raw bands never reach the shader):
+//   bass   → hot-spot intensity (attack ~0.15s, release ~1.2s)
+//   kick   → eased brief injection boost + a modest spark puff
+//   high   → bed flicker rate
+//   tension→ hotter, taller fire (cooling drops, injection up)
+//   drop   → flashover: heat floods the whole base + cooling drops briefly
+//   quiet  → injection nearly off → glowing dying coal bed with pops
+//   tap    → mid-air heat burst at that point (fireball rises, dissolves)
+// Extra-region slot map is documented in pyro_sim.wgsl.
 
-const N_EMBERS = 4096;
+const N_SPARKS = 384;
+const N_SPOTS  = 6;
 
 // asymmetric EMA helper: fast attack, slow release (time constants in s)
 function ema(cur, target, dt, tauA, tauR) {
   return cur + (target - cur) * (1 - Math.exp(-dt / (target > cur ? tauA : tauR)));
 }
-// slew limiter: max units/s up and down
-function slew(cur, target, dt, up, dn) {
-  return cur + Math.max(-dn * dt, Math.min(up * dt, target - cur));
-}
 
 export class PyroPreset {
   constructor() {
     this.frameCount = 0;
-    this._params    = null;
-    this._extra     = new Float32Array(64);
+    this._params = null;
+    this._extra  = new Float32Array(64);
+    this._cur = 0;
+    this._gw = 0; this._gh = 0;
 
-    // smoothed music state (all EMA'd — raw bands never reach the shader)
+    // smoothed music state
     this._bassSm = 0;
     this._highSm = 0;
     this._energy = 0.3;
-    this._glow   = 0.3;   // light-spill envelope — light inertia
+    this._glow   = 0.3;      // light-spill envelope — light inertia
+    this._quiet  = 0;
 
-    // slew-limited body
-    this._height = 0.45;
-    this._width  = 0.35;
-
-    // event envelopes: two-stage (peak decays slowly, env chases peak)
-    // so every hit is an eased swell, never a frame-step jump
-    this._surge = 0; this._surgePk = 0;   // kick → flame swells up
-    this._burst = 0; this._burstPk = 0;   // kick/drop → ember emission
-    this._side  = 0; this._sidePk  = 0;   // snare → sideways crackle
+    // event envelopes: two-stage (peak decays, visible env chases it) so
+    // every hit is an eased swell, never a frame-step jump
+    this._surge = 0; this._surgePk = 0;   // kick → injection boost
+    this._puff  = 0; this._puffPk  = 0;   // kick → spark puff
     this._fo    = 0; this._foPk    = 0;   // drop flashover
-    this._sideDir = 1;
-    this._quiet = 0;      // sustained silence 0..1
-    this._pop   = 0;      // coal pop during quiet
-    this._popX  = 0;
-    this._popTimer = 2;
-    this._prevKick  = 0;
-    this._prevSnare = 0;
-    this._prevDrop  = 0;
+    this._prevKick = 0;
+    this._prevDrop = 0;
 
-    // flame lean: slow wander + hand bend
+    // coal pops during quiet
+    this._pop = 0; this._popX = 0.5; this._popTimer = 2;
+
+    // wind lean: slow non-uniform wander (+ palm bend in hands mode)
     this._leanPhase = Math.random() * 20;
-    this._lean      = 0;
-    this._handBend  = 0;
+    this._lean = 0;
+    this._handBend = 0;
 
-    // fuel tap
+    // coal-bed hot spots: wandering positions, per-spot flicker
+    this._spots = Array.from({ length: N_SPOTS }, (_, k) => ({
+      off: (k / (N_SPOTS - 1)) * 2 - 1,          // home position −1..1
+      ph1: Math.random() * 6.283, sp1: 0.05 + Math.random() * 0.06,
+      ph2: Math.random() * 6.283, sp2: 0.11 + Math.random() * 0.09,
+      fph: Math.random() * 6.283, fsp: 1.3 + Math.random() * 2.4,
+    }));
+
+    // tap fireball
     this._prevTapN = null;   // null = not yet synced (ignore stale taps)
-    this._tapEnv   = 0;
-    this._tapAge   = 9;
-    this._tapX     = 0;
-    this._tapY     = 0;
+    this._tapEnv = 0; this._tapAge = 9; this._tapX = 0.5; this._tapY = 0.5;
   }
 
   async init(device, format, canvas) {
     this.device = device;
     this.canvas = canvas;
 
-    const flameModule   = device.createShaderModule({ label: 'pyro-flame',         code: flameSource });
-    const computeModule = device.createShaderModule({ label: 'pyro-ember-compute', code: computeSource });
-    const renderModule  = device.createShaderModule({ label: 'pyro-ember-render',  code: renderSource });
+    const simModule         = device.createShaderModule({ label: 'pyro-sim',          code: simSource });
+    const renderModule      = device.createShaderModule({ label: 'pyro-render',       code: renderSource });
+    const sparkSimModule    = device.createShaderModule({ label: 'pyro-spark-sim',    code: sparkSimSource });
+    const sparkRenderModule = device.createShaderModule({ label: 'pyro-spark-render', code: sparkRenderSource });
 
     this.uniformBuffer = device.createBuffer({
       size: UNIFORM_SIZE,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
-    // Ember pool: pos.xy, vel.xy, life, heat, seed, kind — starts all dead
-    this.emberBuffer = device.createBuffer({
-      size: N_EMBERS * 32,
+    // spark pool: pos.xy, vel.xy, heat, life, seed, pad — starts all dead
+    this.sparkBuffer = device.createBuffer({
+      size: N_SPARKS * 32,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
-    device.queue.writeBuffer(this.emberBuffer, 0, new Float32Array(N_EMBERS * 8));
+    device.queue.writeBuffer(this.sparkBuffer, 0, new Float32Array(N_SPARKS * 8));
 
-    // Explicit bind group layouts ('auto' drops unused bindings)
-    const flameBGL = device.createBindGroupLayout({
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
-      ],
-    });
-    const computeBGL = device.createBindGroupLayout({
+    // explicit bind group layouts ('auto' drops unused bindings)
+    this._simBGL = device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
-        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
       ],
     });
-    const renderBGL = device.createBindGroupLayout({
+    this._renderBGL = device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
-        { binding: 1, visibility: GPUShaderStage.VERTEX,                           buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
+      ],
+    });
+    this._sparkSimBGL = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      ],
+    });
+    this._sparkRenderBGL = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
       ],
     });
 
-    this.flameBindGroup = device.createBindGroup({
-      layout: flameBGL,
-      entries: [{ binding: 0, resource: { buffer: this.uniformBuffer } }],
+    this.simPipeline = device.createComputePipeline({
+      layout: device.createPipelineLayout({ bindGroupLayouts: [this._simBGL] }),
+      compute: { module: simModule, entryPoint: 'cs_sim' },
     });
-    const emberEntries = [
-      { binding: 0, resource: { buffer: this.uniformBuffer } },
-      { binding: 1, resource: { buffer: this.emberBuffer } },
-    ];
-    this.computeBindGroup = device.createBindGroup({ layout: computeBGL, entries: emberEntries });
-    this.renderBindGroup  = device.createBindGroup({ layout: renderBGL,  entries: emberEntries });
-
-    this.flamePipeline = device.createRenderPipeline({
-      layout: device.createPipelineLayout({ bindGroupLayouts: [flameBGL] }),
-      vertex:   { module: flameModule, entryPoint: 'vs_fullscreen' },
-      fragment: {
-        module: flameModule,
-        entryPoint: 'fs_render',
-        targets: [{
-          format: ACCUM_FORMAT,
-          blend: {
-            color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-            alpha: { srcFactor: 'one', dstFactor: 'zero', operation: 'add' },
-          },
-        }],
-      },
+    this.renderPipeline = device.createRenderPipeline({
+      layout: device.createPipelineLayout({ bindGroupLayouts: [this._renderBGL] }),
+      vertex:   { module: renderModule, entryPoint: 'vs_fullscreen' },
+      fragment: { module: renderModule, entryPoint: 'fs_render', targets: [{ format: ACCUM_FORMAT }] },
       primitive: { topology: 'triangle-list' },
     });
-    this.computePipeline = device.createComputePipeline({
-      layout: device.createPipelineLayout({ bindGroupLayouts: [computeBGL] }),
-      compute: { module: computeModule, entryPoint: 'cs_main' },
+    this.sparkSimPipeline = device.createComputePipeline({
+      layout: device.createPipelineLayout({ bindGroupLayouts: [this._sparkSimBGL] }),
+      compute: { module: sparkSimModule, entryPoint: 'cs_main' },
     });
-    this.emberPipeline = device.createRenderPipeline({
-      layout: device.createPipelineLayout({ bindGroupLayouts: [renderBGL] }),
-      vertex:   { module: renderModule, entryPoint: 'vs_main' },
+    this.sparkRenderPipeline = device.createRenderPipeline({
+      layout: device.createPipelineLayout({ bindGroupLayouts: [this._sparkRenderBGL] }),
+      vertex:   { module: sparkRenderModule, entryPoint: 'vs_main' },
       fragment: {
-        module: renderModule,
+        module: sparkRenderModule,
         entryPoint: 'fs_main',
         targets: [{
           format: ACCUM_FORMAT,
@@ -164,17 +157,64 @@ export class PyroPreset {
       primitive: { topology: 'triangle-list' },
     });
 
+    this.sparkRenderBG = device.createBindGroup({
+      layout: this._sparkRenderBGL,
+      entries: [
+        { binding: 0, resource: { buffer: this.uniformBuffer } },
+        { binding: 1, resource: { buffer: this.sparkBuffer } },
+      ],
+    });
+
+    this._ensureGrid();
     this.post = new PostFX();
     this.post.init(device, format, canvas);
   }
 
+  // temperature grid at half canvas resolution (capped ~720×450), rebuilt
+  // on resize — frost/physarum pattern
+  _ensureGrid() {
+    const gw = Math.min(Math.max(Math.round(this.canvas.width  / 2), 180), 720);
+    const gh = Math.min(Math.max(Math.round(this.canvas.height / 2), 120), 450);
+    if (gw === this._gw && gh === this._gh) return;
+    this._gw = gw; this._gh = gh;
+    this.gridBuffers?.forEach(b => b.destroy());
+    const size = gw * gh * 8;                    // vec2f(temperature, smoke)
+    this.gridBuffers = [0, 1].map(() => this.device.createBuffer({
+      size,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    }));
+    this._simBG = [0, 1].map(i => this.device.createBindGroup({
+      layout: this._simBGL,
+      entries: [
+        { binding: 0, resource: { buffer: this.uniformBuffer } },
+        { binding: 1, resource: { buffer: this.gridBuffers[i] } },
+        { binding: 2, resource: { buffer: this.gridBuffers[1 - i] } },
+      ],
+    }));
+    this._renderBG = [0, 1].map(i => this.device.createBindGroup({
+      layout: this._renderBGL,
+      entries: [
+        { binding: 0, resource: { buffer: this.uniformBuffer } },
+        { binding: 1, resource: { buffer: this.gridBuffers[i] } },
+      ],
+    }));
+    this._sparkSimBG = [0, 1].map(i => this.device.createBindGroup({
+      layout: this._sparkSimBGL,
+      entries: [
+        { binding: 0, resource: { buffer: this.uniformBuffer } },
+        { binding: 1, resource: { buffer: this.gridBuffers[i] } },
+        { binding: 2, resource: { buffer: this.sparkBuffer } },
+      ],
+    }));
+    this._cur = 0;
+  }
+
   _updateMusic(bands, dt, params) {
-    const kick  = bands.kick  ?? 0;
-    const snare = bands.snare ?? 0;
-    const drop  = params.dropPulse ?? 0;
+    const kick = bands.kick ?? 0;
+    const drop = params.dropPulse ?? 0;
     const tension = params.tension ?? 0;
 
-    // every band input is EMA'd: ~0.15s attack, ~1s release — the fire
+    // every band input is EMA'd (~0.15s attack / ~1.2s release) — the fire
     // breathes with the music instead of twitching with it
     const bass = (bands.bass ?? 0) * 0.75 + (bands.subBass ?? 0) * 0.25;
     this._bassSm = ema(this._bassSm, bass,            dt, 0.15, 1.2);
@@ -182,72 +222,62 @@ export class PyroPreset {
     const eTarget = ((bands.bass ?? 0) + (bands.mid ?? 0) + (bands.high ?? 0)) / 3;
     this._energy += (eTarget - this._energy) * (1 - Math.exp(-dt / 1.5));
 
-    // sustained silence → the fire dies down to breathing coals
+    // sustained silence → injection dies down to breathing coals
     const qT = this._energy < 0.05 ? 1 : 0;
     this._quiet += (qT - this._quiet)
-                 * (1 - Math.exp(-dt / (qT > this._quiet ? 2.2 : 0.8)));
+                 * (1 - Math.exp(-dt / (qT > this._quiet ? 3.2 : 0.8)));
 
-    // kick → surge: sets a slowly-decaying peak; the visible envelope eases
-    // toward it (attack ~0.13s, gone in ~0.6s) — a swell, not a jump
+    // kick → eased brief injection boost + a modest spark puff (not a burst)
     if (kick > 0.45 && this._prevKick <= 0.35) {
-      this._surgePk = Math.max(this._surgePk, 0.30 + kick * 0.35);
-      this._burstPk = Math.max(this._burstPk, 0.22 + kick * 0.28);
+      this._surgePk = Math.max(this._surgePk, 0.25 + kick * 0.30);
+      this._puffPk  = Math.max(this._puffPk,  0.20 + kick * 0.25);
     }
     this._prevKick = kick;
 
-    // snare → a gentle sideways crackle
-    if (snare > 0.4 && this._prevSnare <= 0.32) {
-      this._sidePk  = Math.max(this._sidePk, 0.30 + snare * 0.35);
-      this._sideDir = Math.random() < 0.5 ? -1 : 1;
-    }
-    this._prevSnare = snare;
-
-    // drop → flashover (eased attack ~0.18s) + a strong-but-soft ember wave
+    // drop → flashover: heat floods the base, cooling drops (in-shader),
+    // the sim itself produces the engulfing wall — then recovers
     if (drop > 0.6 && this._prevDrop <= 0.6) {
       this._foPk    = 1;
-      this._burstPk = Math.max(this._burstPk, 1.2);
-      this._surgePk = Math.max(this._surgePk, 0.9);
+      this._surgePk = Math.max(this._surgePk, 0.8);
+      this._puffPk  = Math.max(this._puffPk, 0.9);
     }
     this._prevDrop = drop;
 
-    // two-stage envelopes: peak decays, visible env chases it (eased both ways)
+    // two-stage envelopes: peak decays, visible env chases it (eased)
     this._surgePk *= Math.exp(-dt / 0.35);
-    this._burstPk *= Math.exp(-dt / 0.30);
-    this._sidePk  *= Math.exp(-dt / 0.28);
-    this._foPk    *= Math.exp(-dt * 1.15);   // engulf ~1 s, then collapse
+    this._puffPk  *= Math.exp(-dt / 0.30);
+    this._foPk    *= Math.exp(-dt * 1.15);   // engulf ~1s, then recover
     this._surge += (this._surgePk - this._surge) * (1 - Math.exp(-dt / 0.13));
-    this._burst += (this._burstPk - this._burst) * (1 - Math.exp(-dt / 0.10));
-    this._side  += (this._sidePk  - this._side)  * (1 - Math.exp(-dt / 0.09));
+    this._puff  += (this._puffPk  - this._puff)  * (1 - Math.exp(-dt / 0.10));
     this._fo    += (this._foPk    - this._fo)    * (1 - Math.exp(-dt / 0.18));
-    this._pop   *= Math.exp(-dt * 5.5);
+    this._pop   *= Math.exp(-dt * 4.5);
 
     // light spill follows overall fire intensity with heavy inertia (~0.7s)
-    const gTarget = 0.20 + this._energy * 0.9 + this._surge * 0.35 + this._fo * 0.8;
+    const gTarget = 0.15 + this._energy * 0.9 + this._surge * 0.3 + this._fo * 0.9;
     this._glow += (gTarget - this._glow) * (1 - Math.exp(-dt / 0.7));
 
-    // occasional coal pops while quiet
+    // occasional coal pops while quiet — a lick of flame off one coal
     if (this._quiet > 0.5) {
       this._popTimer -= dt;
       if (this._popTimer <= 0) {
-        this._popTimer = 1.2 + Math.random() * 3.0;
+        this._popTimer = 1.4 + Math.random() * 3.2;
         this._pop  = 1;
-        this._popX = (Math.random() - 0.5) * 1.3;
+        this._popX = 0.5 + (Math.random() - 0.5) * 0.4;
       }
     }
 
-    // lean: slow non-uniform wander, amplified by tension; palm bends it
-    this._leanPhase += dt * (0.30 + tension * 0.55);
+    // wind lean: slow non-uniform wander, amplified by tension; palm bends
+    this._leanPhase += dt * (0.28 + tension * 0.5);
     const wander = Math.sin(this._leanPhase)
                  * (0.55 + Math.sin(this._leanPhase * 0.37) * 0.45)
-                 * 0.11 * (1 + tension * 2.0);
+                 * 0.30 * (1 + tension * 1.4);
     let bendT = 0;
     if (params.gestMode === 2 && params.hands) {
-      const asp = this.canvas.width / Math.max(this.canvas.height, 1);
       let best = null;
       for (const h of params.hands.h ?? []) {
         if (h && (h.present ?? 0) > 0.25 && (!best || h.present > best.present)) best = h;
       }
-      if (best) bendT = (best.x * 2 - 1) * asp * 0.28 * Math.min(best.present, 1);
+      if (best) bendT = (best.x * 2 - 1) * 0.9 * Math.min(best.present, 1);
     }
     this._handBend += (bendT - this._handBend) * (1 - Math.exp(-dt / 0.25));
     this._lean += (wander + this._handBend - this._lean) * (1 - Math.exp(-dt / 0.6));
@@ -256,93 +286,115 @@ export class PyroPreset {
   tick(device, bands, timeMs, deltaMs, params) {
     this.frameCount++;
     this._params = params;
+    this._ensureGrid();
     const dt = Math.min(deltaMs, 50) * 0.001;
+    const t  = timeMs * 0.001;
 
     this._updateMusic(bands, dt, params);
 
-    // ── tap = throw fuel on the fire at that point ────────────────────────
+    // ── tap = mid-air heat burst at that point ────────────────────────────
     const tapN = params.cymTapN ?? 0;
     if (this._prevTapN === null) this._prevTapN = tapN;
     if (tapN !== this._prevTapN) {
       this._prevTapN = tapN;
-      const asp = this.canvas.width / Math.max(this.canvas.height, 1);
-      this._tapX = ((params.cymTapX ?? 0.5) * 2 - 1) * asp;
-      this._tapY = 1 - (params.cymTapY ?? 0.5) * 2;
+      this._tapX = params.cymTapX ?? 0.5;
+      this._tapY = 1 - (params.cymTapY ?? 0.5);   // sim uv is y-up
       this._tapEnv = 1;
       this._tapAge = 0;
     }
     this._tapAge += dt;
-    this._tapEnv *= Math.exp(-dt * 1.6);   // burns out over ~1.5 s
+    this._tapEnv *= Math.exp(-dt * 1.6);
 
-    // ── flame body params: EMA'd inputs + slew limit = no frame jumps ────
+    // ── hot-spot bed: positions wander slowly, intensity = smoothed bass ──
     const tension = params.tension ?? 0;
-    const hTarget = (0.42 + this._bassSm * 0.95 + tension * 0.38 + this._surge * 0.45)
-                  * (1 - this._quiet * 0.70) + 0.10;
-    const wTarget = (0.34 + this._bassSm * 0.26 + this._surge * 0.08)
-                  * (1 - this._quiet * 0.5);
-    this._height = slew(this._height, hTarget, dt, 0.80, 0.45);
-    this._width  = slew(this._width,  wTarget, dt, 0.50, 0.30);
-    const roar    = Math.min(1.2, tension * 0.7 + this._surge * 0.5 + this._fo * 0.9);
-    const flicker = this._highSm * 1.1;
+    const spread = 0.62 + this._bassSm * 0.30 - this._quiet * 0.30;
+    const iBase = (0.32 + this._bassSm * 0.72 + this._surge * 0.50 + tension * 0.22)
+                * (1 - this._quiet * 0.90) + 0.13 + this._quiet * 0.20;
+    let cxAcc = 0, iAcc = 0;
+    const spotVals = [];
+    for (const s of this._spots) {
+      let x = 0.5 + s.off * 0.26 * spread
+            + Math.sin(t * s.sp1 * 6.283 + s.ph1) * 0.085
+            + Math.sin(t * s.sp2 * 6.283 + s.ph2) * 0.045
+            + this._lean * 0.04;
+      x = Math.min(0.92, Math.max(0.08, x));
+      // per-spot flicker: faster when highs are busy, deeper when quiet
+      const flick = 0.62 + 0.38 * Math.sin(t * s.fsp * (1 + this._highSm * 1.5) + s.fph);
+      const dim = this._quiet > 0.4 ? (0.72 + 0.28 * Math.sin(t * 0.9 + s.fph * 3)) : 1;
+      const I = Math.min(1.35, iBase * flick * dim);
+      spotVals.push(x, I);
+      cxAcc += x * I; iAcc += I;
+    }
+    const bedCx = iAcc > 1e-4 ? cxAcc / iAcc : 0.5;
 
-    // ember emission: a continuous leak scaled by flame intensity —
-    // fewer, larger, softer sparks (render pass draws them as soft motes)
-    const rBase  = (0.002 + this._energy * 0.014 + this._bassSm * 0.006)
-                 * (1 - this._quiet * 0.8) + 0.001;
-    const rBurst = this._burst * 0.35;
-    const rSide  = this._side * 0.30;
+    // ── cooling: quiet chokes the flame, bass/tension/drop let it climb ───
+    const coolMul = Math.min(2.8, Math.max(0.5,
+      (1.05 + this._quiet * 1.5 - this._bassSm * 0.28 - tension * 0.12
+        - this._surge * 0.10) * (1 - this._fo * 0.55)
+        * (1 - this._tapEnv * 0.45)));   // let a tap fireball live and rise
 
-    // Persistence LOW — flames must stay crisp; embers keep short hot streaks
-    const alpha = 1 - 0.45 * PostFX.effTrail(params);
-    const u = buildUniforms(bands, timeMs, deltaMs, params, this.canvas, this.frameCount, alpha);
+    // ── sparks: continuous leak from hot tongue tips; kick = modest puff ──
+    const sparkRate = (0.10 + this._energy * 0.85 + this._bassSm * 0.30)
+                    * (1 - this._quiet * 0.97);
+    const sparkBurst = this._puff * 1.3;
+
+    // no accumulation trails — the sim supplies all motion; streaks are
+    // geometric. fadePass(0) clears, flame writes opaque, sparks add.
+    const u = buildUniforms(bands, timeMs, deltaMs, params, this.canvas, this.frameCount, 1);
     device.queue.writeBuffer(this.uniformBuffer, 0, u);
 
     const e = this._extra;
-    e[0]  = this._height;  e[1]  = this._width;   e[2]  = this._lean;   e[3]  = roar;
-    e[4]  = flicker;       e[5]  = this._surge;   e[6]  = this._fo;     e[7]  = this._quiet;
-    e[8]  = this._tapX;    e[9]  = this._tapY;    e[10] = this._tapEnv; e[11] = this._tapAge;
-    e[12] = rBase;         e[13] = rBurst;        e[14] = rSide;        e[15] = this._sideDir;
-    e[16] = this._pop;     e[17] = this._popX;    e[18] = this._glow;   e[19] = 0;
+    e[0] = this._gw;  e[1] = this._gh;    e[2] = this._quiet; e[3] = 0;
+    e[4] = coolMul;   e[5] = this._lean;  e[6] = this._fo;    e[7] = 0;
+    e[8] = this._tapX; e[9] = this._tapY; e[10] = this._tapEnv; e[11] = this._tapAge;
+    for (let k = 0; k < N_SPOTS * 2; k++) e[12 + k] = spotVals[k];   // extra[3..5]
+    e[24] = sparkRate; e[25] = sparkBurst; e[26] = this._glow; e[27] = this._energy;
+    e[28] = bedCx;     e[29] = this._highSm; e[30] = this._pop; e[31] = this._popX;
     device.queue.writeBuffer(this.uniformBuffer, RIPPLE_OFFSET, e);
-    if (typeof window !== 'undefined' && window.__pyroDebug) {
-      window.__pyroDbg = { height: this._height, width: this._width, fo: this._fo,
-        surge: this._surge, quiet: this._quiet, bassSm: this._bassSm,
-        energy: this._energy, glow: this._glow, roar, flicker, rBase };
-    }
 
-    const enc  = device.createCommandEncoder();
-    const pass = enc.beginComputePass();
-    pass.setPipeline(this.computePipeline);
-    pass.setBindGroup(0, this.computeBindGroup);
-    pass.dispatchWorkgroups(Math.ceil(N_EMBERS / 64));
-    pass.end();
-    device.queue.submit([enc.finish()]);
+    if (typeof window !== 'undefined' && window.__pyroDebug) {
+      window.__pyroDbg = { bassSm: this._bassSm, energy: this._energy,
+        quiet: this._quiet, fo: this._fo, surge: this._surge, glow: this._glow,
+        coolMul, sparkRate, bedCx, lean: this._lean };
+    }
   }
 
   draw(device, view) {
     this.post.ensureTargets();
     const enc = device.createCommandEncoder();
-    // Echo copies last frame; the flame pass alpha does the actual decay
-    this.post.fadePass(enc, 1, this._params);
 
+    // fire sim step (ping-pong), then sparks sample the fresh grid
+    const cp = enc.beginComputePass();
+    cp.setPipeline(this.simPipeline);
+    cp.setBindGroup(0, this._simBG[this._cur]);
+    cp.dispatchWorkgroups(Math.ceil(this._gw / 16), Math.ceil(this._gh / 16));
+    cp.end();
+    this._cur = 1 - this._cur;
+    const sp = enc.beginComputePass();
+    sp.setPipeline(this.sparkSimPipeline);
+    sp.setBindGroup(0, this._sparkSimBG[this._cur]);
+    sp.dispatchWorkgroups(Math.ceil(N_SPARKS / 64));
+    sp.end();
+
+    this.post.fadePass(enc, 0, this._params);
     const pass = enc.beginRenderPass({
       colorAttachments: [{ view: this.post.accumView, loadOp: 'load', storeOp: 'store' }],
     });
-    pass.setPipeline(this.flamePipeline);
-    pass.setBindGroup(0, this.flameBindGroup);
+    pass.setPipeline(this.renderPipeline);
+    pass.setBindGroup(0, this._renderBG[this._cur]);
     pass.draw(3);
-    pass.setPipeline(this.emberPipeline);
-    pass.setBindGroup(0, this.renderBindGroup);
-    pass.draw(N_EMBERS * 6);
+    pass.setPipeline(this.sparkRenderPipeline);
+    pass.setBindGroup(0, this.sparkRenderBG);
+    pass.draw(N_SPARKS * 6);
     pass.end();
-
     this.post.finish(enc, view, this._params);
     device.queue.submit([enc.finish()]);
   }
 
   destroy() {
-    this.post?.destroy();
-    this.emberBuffer?.destroy();
+    this.gridBuffers?.forEach(b => b.destroy());
+    this.sparkBuffer?.destroy();
     this.uniformBuffer?.destroy();
+    this.post?.destroy();
   }
 }
