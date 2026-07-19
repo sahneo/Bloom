@@ -6,10 +6,14 @@ import { currentMediaItem } from './dither.js';
 
 // KINO — a faithful port of kinotype.xyz's eight "moving typographic
 // graphics" modes over the shared media playlist, with audio reactivity.
-// Fullscreen shader modes (0/1/2/6/7) live in kino.wgsl; particle/pen/text
+// Fullscreen shader modes (0/1/2/6) live in kino.wgsl; particle/pen/text
 // sprite modes (3/4/5) are CPU-simulated over a small luminance+Sobel field
 // of the source and rendered via kino_glyph.wgsl into the PostFX accum
 // (flow field & scribbles rely on accum persistence for their trails).
+// Mode 7 (pixel sort) is a CPU Kim-Asendorf sort: the source is downsampled
+// to the dial resolution, contiguous bright runs per row/column are sorted
+// by luminance in JS, and the result is uploaded to a texture the shader
+// displays full-frame (chunky nearest pixels).
 // With an empty playlist a procedural grayscale "galaxy" is the source.
 // Audio: EMA-smoothed bands (attack .15s / release 1s) breathe cells & dots,
 // kick = ring pulse from centre, snare = glyph jitter, high = twinkle rate,
@@ -94,6 +98,13 @@ export class KinoPreset {
     this._tfBudget = 0;
     this._tfFade = 1;
     this._tfGh = 0.05;
+
+    // mode 7 pixel sort (CPU Asendorf)
+    this._sortTex = null;
+    this._sortW = 0;
+    this._sortH = 0;
+    this._sortLum = null;
+    this._runBuf = [];
   }
 
   async init(device, format, canvas) {
@@ -162,6 +173,10 @@ export class KinoPreset {
     this._fieldCvs.width = LW; this._fieldCvs.height = LH;
     this._fieldCtx = this._fieldCvs.getContext('2d', { willReadFrequently: true });
 
+    this._sortCvs = document.createElement('canvas');
+    this._sortCvs.width = 4; this._sortCvs.height = 4;
+    this._sortCtx = this._sortCvs.getContext('2d', { willReadFrequently: true });
+
     this._makeProcSource();
     this.mediaTex = this._makeTex(1, 1);
     this.atlasTex = null;
@@ -198,6 +213,17 @@ export class KinoPreset {
         { binding: 1, resource: this._sampler },
         { binding: 2, resource: this.atlasTex.createView() },
         { binding: 3, resource: { buffer: this.instBuffer } },
+      ],
+    });
+    // mode 7 variant: the CPU-sorted frame replaces the media texture
+    this.fsBGSort = !this._sortTex ? null : this.device.createBindGroup({
+      layout: this._fsBGL,
+      entries: [
+        { binding: 0, resource: { buffer: this.uniformBuffer } },
+        { binding: 1, resource: this._sampler },
+        { binding: 2, resource: this._sortTex.createView() },
+        { binding: 3, resource: this.atlasTex.createView() },
+        { binding: 4, resource: { buffer: this.textBuffer } },
       ],
     });
   }
@@ -402,6 +428,112 @@ export class KinoPreset {
     const L = this._luma, GX = this._gradX, GY = this._gradY;
     const bl = (A) => mixN(mixN(A[i], A[i + 1], tx), mixN(A[i + LW], A[i + LW + 1], tx), ty);
     return { l: bl(L), gx: bl(GX), gy: -bl(GY) };   // gy flipped to y-up world
+  }
+
+  // ── mode 7: CPU pixel sort (Kim Asendorf) ────────────────────────────────
+  // Downsample the source cover-fit to the dial resolution, then per row
+  // (or column when Vertical) find contiguous runs of pixels brighter than a
+  // threshold and sort the run's actual pixels by luminance — each run becomes
+  // a smooth monotonic gradient streak with hard stops at the threshold
+  // boundaries. The threshold breathes with bass, a sweep band lowers it
+  // locally, kick sends a dip ripple from centre, snare flips a few rows'
+  // sort direction, DROP floors it so the whole frame sorts.
+  _ensureSortTex(W, H) {
+    if (this._sortW === W && this._sortH === H && this._sortTex) return;
+    this._sortW = W; this._sortH = H;
+    this._sortCvs.width = W; this._sortCvs.height = H;
+    this._sortTex?.destroy();
+    this._sortTex = this._makeTex(W, H);
+    if (!this._sortLum || this._sortLum.length !== W * H) this._sortLum = new Float32Array(W * H);
+    this._rebind();
+  }
+
+  _sortFrame(asp, p, react) {
+    const el = this._fieldSource;
+    if (!el) return;
+    const sw = el.videoWidth ?? el.width, sh = el.videoHeight ?? el.height;
+    if (!sw || !sh) return;
+    const W = Math.round(mixN(96, 640, clamp01(p[0])));
+    const H = Math.max(16, Math.min(512, Math.round(W / Math.max(asp, 0.2))));
+    this._ensureSortTex(W, H);
+
+    // cover-fit crop of the source into the sort canvas (same as _refreshField)
+    const texA = sw / sh;
+    let cw = sw, ch = sh, cx = 0, cy = 0;
+    if (texA > asp) { cw = sh * asp; cx = (sw - cw) / 2; }
+    else            { ch = sw / asp; cy = (sh - ch) / 2; }
+    const ctx = this._sortCtx;
+    let img;
+    try {
+      ctx.drawImage(el, cx, cy, cw, ch, 0, 0, W, H);
+      img = ctx.getImageData(0, 0, W, H);
+    } catch (_) { return; }
+    const d = img.data;
+    const lum = this._sortLum;
+    const n = W * H;
+    for (let i = 0; i < n; i++) {
+      lum[i] = (d[i * 4] * 0.2126 + d[i * 4 + 1] * 0.7152 + d[i * 4 + 2] * 0.0722) / 255;
+    }
+
+    const vert = p[3] > 0.5;
+    const lines = vert ? W : H;
+    const len = vert ? H : W;
+    // threshold: dial base, breathing down with bass (runs grow on the beat)
+    const thBase = 0.12 + clamp01(p[1]) * 0.78 - this._bassSm * react * 0.22;
+    const dropT = Math.min(this._dropEnv * 1.4, 1);
+    const kickE = Math.min(this._kickEnv * react, 1);
+    const snr = this._snareEnv * react;
+    const swPos = this._sweep;
+    const front = this._kickAge * 1.6;          // kick dip ripple radius
+    const frameSeed = Math.floor(this._t * 24);
+    const run = this._runBuf;
+    const cmp = (a, b) => a - b;
+
+    for (let li = 0; li < lines; li++) {
+      const o = lines > 1 ? li / (lines - 1) : 0;
+      let th = thBase;
+      let dsw = Math.abs(o - swPos);
+      dsw = Math.min(dsw, 1 - dsw);
+      th -= Math.exp(-((dsw / 0.09) ** 2)) * 0.30;             // sweep band
+      const d2 = Math.abs(Math.abs(o - 0.5) * 2 - front);
+      th -= kickE * Math.exp(-((d2 * 5) ** 2)) * 0.25;         // kick ripple
+      th = mixN(th, 0.02, dropT);                              // drop: sort all
+      th = Math.min(Math.max(th, 0.02), 0.97);
+      const desc = snr > 0.05 && h2(li * 1.7 + 0.31, frameSeed) < snr * 0.25;
+      const base = vert ? li : li * W;
+      const stride = vert ? W : 1;
+      let rs = -1;
+      for (let k = 0; k <= len; k++) {
+        const on = k < len && lum[base + k * stride] > th;
+        if (on) { if (rs < 0) rs = k; continue; }
+        if (rs >= 0) {
+          const rl = k - rs;
+          if (rl >= 3) {
+            run.length = rl;
+            for (let m = 0; m < rl; m++) {
+              const i = base + (rs + m) * stride;
+              const q = i * 4;
+              // pack sort key (10-bit luminance) + 24-bit colour in one number
+              run[m] = Math.round(lum[i] * 1023) * 16777216
+                     + (d[q] << 16) + (d[q + 1] << 8) + d[q + 2];
+            }
+            run.sort(cmp);
+            for (let m = 0; m < rl; m++) {
+              const c = run[desc ? rl - 1 - m : m] % 16777216;
+              const q = (base + (rs + m) * stride) * 4;
+              d[q] = (c >> 16) & 255; d[q + 1] = (c >> 8) & 255; d[q + 2] = c & 255;
+            }
+          }
+          rs = -1;
+        }
+      }
+    }
+
+    ctx.putImageData(img, 0, 0);
+    try {
+      this.device.queue.copyExternalImageToTexture(
+        { source: this._sortCvs }, { texture: this._sortTex }, [W, H]);
+    } catch (_) {}
   }
 
   _noise2(x, y) {
@@ -700,6 +832,8 @@ export class KinoPreset {
 
     this._sweep = frac(this._sweep + dt * (0.04 + p[2] * 0.32) * (0.5 + eEnergy * 0.8));
 
+    if (mode === 7) this._sortFrame(asp, p, react);
+
     // sprite modes: rebuild instances
     this._count = 0;
     if (mode === 3)      this._simFlow(dt, asp, p, eEnergy);
@@ -751,7 +885,7 @@ export class KinoPreset {
       }
     } else {
       pass.setPipeline(this.fsPipeline);
-      pass.setBindGroup(0, this.fsBG);
+      pass.setBindGroup(0, mode === 7 && this.fsBGSort ? this.fsBGSort : this.fsBG);
       pass.draw(3);
     }
     pass.end();
@@ -762,6 +896,7 @@ export class KinoPreset {
   destroy() {
     this.mediaTex?.destroy();
     this.atlasTex?.destroy();
+    this._sortTex?.destroy();
     this.instBuffer?.destroy();
     this.textBuffer?.destroy();
     this.post?.destroy();

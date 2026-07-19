@@ -118,13 +118,6 @@ fn paperize(v: f32, invD: f32) -> vec3f {
   return col;
 }
 
-fn axisUV(t: f32, o: f32, vert: f32) -> vec2f {
-  return select(vec2f(t, o), vec2f(o, t), vert > 0.5);
-}
-fn lum1(t: f32, o: f32, vert: f32) -> f32 {
-  return lumAt(axisUV(t, o, vert));
-}
-
 @fragment
 fn fs_render(in: VSOut) -> @location(0) vec4f {
   let E0 = u.extra[0];
@@ -261,56 +254,14 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
     }
 
   } else {
-    // ── 7 PIXEL SORT: brightness-sorted streaks sweep across the image ────
-    let res = mix(90.0, 380.0, P.x);
-    let vert = select(0.0, 1.0, P.w > 0.5);
-    let tA = select(uv.x, uv.y, vert > 0.5);
-    let oA = select(uv.y, uv.x, vert > 0.5);
-    let stepT = 1.0 / res;
-    let boom = u.extra[2].z;
-    let sw = u.extra[6].z;
-    var dsw = abs(oA - sw);
-    dsw = min(dsw, 1.0 - dsw);
-    var act = smoothstep(0.20, 0.02, dsw);
-    // random streak bands flicking on/off across the frame (kinotype glitch)
-    let band = floor(oA * 36.0);
-    let bph = hash21(vec2f(band, floor(u.time * 0.8 + hash21(vec2f(band, 3.3)))));
-    act = max(act, step(bph, 0.30 + u.extra[0].z * 0.25));
-    let th = mix(0.12, 0.80, P.y) - u.extra[0].z * 0.15;
-    let effTh = mix(1.5, th, max(act, min(boom * 1.4, 1.0)));
-    let t0 = (floor(tA * res) + 0.5) * stepT;
-    if (lum1(t0, oA, vert) < effTh) {
-      v = lumAt(uv) * 0.92;
-    } else {
-      var s = tA; var e2 = tA;
-      for (var k = 1; k <= 88; k++) {
-        let t = tA - f32(k) * stepT;
-        if (t < 0.0 || lum1(t, oA, vert) < effTh) { break; }
-        s = t;
-      }
-      for (var k = 1; k <= 88; k++) {
-        let t = tA + f32(k) * stepT;
-        if (t > 1.0 || lum1(t, oA, vert) < effTh) { break; }
-        e2 = t;
-      }
-      let L = max(e2 - s, stepT);
-      let o = clamp((tA - s) / L, 0.0, 0.999);
-      var ls: array<f32, 16>;
-      for (var i = 0; i < 16; i++) {
-        ls[i] = lum1(s + (f32(i) + 0.5) / 16.0 * L, oA, vert);
-      }
-      var best = 0; var bestD = 9.0;
-      for (var i = 0; i < 16; i++) {
-        var rank = 0.0;
-        for (var j = 0; j < 16; j++) {
-          if (ls[j] < ls[i] || (ls[j] == ls[i] && j < i)) { rank += 1.0; }
-        }
-        let d = abs((rank + 0.5) / 16.0 - o);
-        if (d < bestD) { bestD = d; best = i; }
-      }
-      // contrast-stretch the sorted ramp so streaks read hard-edged
-      v = pow(ls[best], 1.9) * 1.30;
-    }
+    // ── 7 PIXEL SORT: display the CPU Asendorf-sorted frame ───────────────
+    // JS sorts contiguous bright runs of the downsampled source by luminance
+    // each frame and uploads the result here (bound in place of the media
+    // texture, already cover-fit to screen aspect). Colours come straight
+    // from the source; nearest sampling keeps the pixels chunky.
+    let dims = vec2f(textureDimensions(media));
+    let tuv = (floor(uv * dims) + 0.5) / dims;
+    return vec4f(textureSampleLevel(media, samp, tuv, 0.0).rgb, 1.0);
   }
 
   return vec4f(paperize(v, invD), 1.0);
