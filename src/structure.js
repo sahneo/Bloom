@@ -35,6 +35,7 @@ export class StructureAnalyzer {
     this._ringT   = 0;
 
     this._bassLowMs  = 0;      // how long bass has been well below its norm
+    this._tenseMs    = 0;      // how long tension has stayed high (real builds)
     this._sinceDropMs = 1e9;
     this._playMs      = 0;     // total time with signal — norms need warm-up
     this._prevBarPos  = 0;
@@ -103,17 +104,32 @@ export class StructureAnalyzer {
     // Warm-up guard: the slow norms need ~12 s of material before bassRel is
     // meaningful — without it every intro's first bass entry fires a "drop".
     //
+    // A drop needs BOTH a real precursor and a real slam. Precursor: a deep
+    // breakdown (bass gone for 2.2 s+ — a one-bar rest between phrases does
+    // NOT count) or tension held high for 2.5 s+ (a single crescendo spike
+    // does not count). Slam: the mix jumps suddenly vs 1.5 s ago AND bass
+    // lands clearly above its norm — "bass at its usual level plus a kick"
+    // is just the track playing, not a drop.
+    //
     // Beat quantization: envelope detection inevitably lags the real hit by
     // 100–300 ms (live input has no lookahead), so a raw trigger lands between
     // beats and reads as a miss. Real drops land on the beat — so the energy
     // condition only ARMS the drop; the blast FIRES on the beat grid: right
     // away if a beat just passed, else exactly on the next predicted beat.
     this._sinceDropMs += dtMs;
-    const primed = inBreakdown || this._bassLowMs > 1200 || this.tension > 0.7;
-    const energyJump = this._fast > this._slow * 1.15;   // the mix actually got louder
+    this._tenseMs = this.tension > 0.65 ? this._tenseMs + dtMs : 0;
+    const deepBreak = this._bassLowMs > 2200;
+    const primed    = deepBreak || this._tenseMs > 2500;
+    const ago15 = this._ring[(((this._ringPos - 6) % 32) + 32) % 32]; // ~1.5 s ago
+    const slam       = this._fast - ago15 > 0.10;        // sudden, not gradual
+    const energyJump = this._fast > this._slow * 1.30 && this._fast > 0.12;
+    // After a deep breakdown the RETURN of bass to its norm IS the drop;
+    // a build-up without a breakdown must instead punch clearly above norm.
+    const bassBack = bassRel > (deepBreak ? 0.95 : 1.30);
+    const punch    = deepBreak ? slam : (energyJump && slam);
     if (playing && primed && this._playMs > 12000
-        && bassRel > 1.0 && bands.kick > 0.5 && energyJump
-        && this._sinceDropMs > 8000 && this._dropPendingMs <= 0) {
+        && bassBack && bands.kick > 0.55 && punch
+        && this._sinceDropMs > 15000 && this._dropPendingMs <= 0) {
       this._dropPendingMs = beat.conf > 0.4 ? beat.period * 1200 : 1;  // ≤1.2 beats
     }
     if (this._dropPendingMs > 0) {
@@ -125,6 +141,7 @@ export class StructureAnalyzer {
         this.dropPulse   = 1;
         this.tension     = Math.min(this.tension, 0.15);
         this._bassLowMs  = 0;
+        this._tenseMs    = 0;
         this._sinceDropMs   = 0;
         this._dropPendingMs = 0;
       }
