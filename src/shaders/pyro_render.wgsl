@@ -86,19 +86,19 @@ fn fs_render(in: VSOut) -> @location(0) vec4f {
   let p = vec2f(in.uv.x, 1.0 - in.uv.y);
   let g = sampleGrid(p * vec2f(f32(gw), f32(gh)) - 0.5, gw, gh);
   let T = g.x;
-  let S = g.y;
 
-  // ── flame body: soft wide falloff, blackbody colour, HDR core ─────────
-  let body = smoothstep(0.02, 0.38, T);
-  let Tc = clamp(T, 0.0, 1.15);
+  // ── flame body ────────────────────────────────────────────────────────
+  // Render-side striation: fine advected noise splits the smooth sim field
+  // into licking tongues (detail the half-res grid can't carry itself)
+  let dq = vec2f(p.x * asp * 13.0, p.y * 8.0 - u.time * 3.6) + u.scene_seed * 4.7;
+  let det = 0.58 + 0.78 * (vnoise(dq) * 0.65 + vnoise(dq * 2.3 + vec2f(11.7, 3.9)) * 0.35);
+  let Td = T * mix(1.0, det, smoothstep(0.06, 0.40, T));
+  // tight toe: lukewarm haze is invisible — no dark drapery around the fire
+  let body = smoothstep(0.14, 0.52, Td);
+  let Tc = clamp(Td, 0.0, 1.15);
   // ramp evaluated at 0.92·T: white only appears in the genuinely hottest
   // core; mid-flame sits orange-yellow, gently over the 0.30 bloom threshold
   var col = fire_ramp(Tc * 0.92) * (0.10 * Tc + 0.95 * pow(Tc, 2.3)) * body;
-
-  // ── smoke: cooled cells above leave grey wisps, faintly lit from below ─
-  let smokeVis = S * (1.0 - smoothstep(0.22, 0.50, T)) * smoothstep(0.06, 0.40, p.y);
-  let smokeN = 0.60 + 0.55 * vnoise(vec2f(p.x * asp * 5.0, p.y * 5.0 - u.time * 0.35) + u.scene_seed);
-  col += vec3f(0.17, 0.163, 0.158) * (0.30 + glow * 0.70) * smokeVis * smokeN * 0.30;
 
   // ── warm radial light spill around the bed (slow JS inertia) ──────────
   let sd = vec2f((p.x - E7.x) * asp, p.y + 0.05);

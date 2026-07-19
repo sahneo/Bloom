@@ -86,10 +86,10 @@ fn sampleSrc(pc: vec2f, gw: i32, gh: i32) -> vec2f {
 fn flowVel(p: vec2f, T: f32, asp: f32, windLean: f32) -> vec2f {
   let t = u.time;
   // eddies travel upward with the gas (the churn field itself rises)
-  let q = vec2f(p.x * asp * 3.2, p.y * 2.6 - t * 0.72) + u.scene_seed * 7.1;
-  var v = curl2(q) * 0.155 * (0.18 + min(T, 1.2));
+  let q = vec2f(p.x * asp * 4.6, p.y * 3.4 - t * 1.15) + u.scene_seed * 7.1;
+  var v = curl2(q) * 0.19 * (0.18 + min(T, 1.2));
   // fine fast wiggle inside the hot column
-  v.x += sin(p.y * 21.0 - t * 5.2 + p.x * 13.0) * 0.020 * min(T, 1.0);
+  v.x += sin(p.y * 26.0 - t * 7.5 + p.x * 15.0) * 0.028 * min(T, 1.0);
   // buoyancy — hotter gas rises faster (this is what makes tongues stretch)
   v.y += 0.04 + min(T, 1.3) * 0.50;
   // inward convergence near the base + wind lean growing with height
@@ -130,17 +130,17 @@ fn cs_sim(@builtin(global_invocation_id) gid: vec3u) {
   let r  = src[u32(y * gw + min(x + 1, gw - 1))];
   let dn = src[u32(max(y - 1, 0) * gw + x)];
   let up = src[u32(min(y + 1, gh - 1) * gw + x)];
-  c = mix(c, (l + r + up + dn) * 0.25, 0.10);
+  c = mix(c, (l + r + up + dn) * 0.25, 0.05);
 
   var T = c.x;
   var S = c.y;
 
   // ── cooling: stronger higher up, per-cell noise shreds the tongue tips ─
   let cn = vnoise(vec2f(p.x * asp * 7.5, p.y * 7.5 - u.time * 1.9) + u.scene_seed * 3.0);
-  let coolY = 0.70 + 1.80 * pow(p.y, 1.2);
+  let coolY = 0.52 + 1.65 * pow(p.y, 1.2);
   let shred = pow(cn, 2.0) * 3.2 * smoothstep(0.04, 0.40, p.y);
   // hotter cells cool faster — keeps the white core small and near the bed
-  T -= dt * (coolY + shred) * coolMul * (0.12 + T * 0.95);
+  T -= dt * (coolY + shred) * coolMul * (0.22 + T * 0.95);
 
   // ── smoke: born where flame cools, decays and drifts up with the flow ──
   let gen = smoothstep(0.05, 0.28, T) * (1.0 - smoothstep(0.45, 0.85, T));
