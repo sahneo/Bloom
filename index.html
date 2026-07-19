@@ -619,7 +619,7 @@
       width: 240px;
     }
     #type-panel.hidden { display: none; }
-    #fx-panel {
+    #fx-panel, #kino-panel {
       position: fixed;
       top: 52px;
       left: 20px;
@@ -634,21 +634,21 @@
       pointer-events: all;
       width: 240px;
     }
-    #fx-panel.hidden { display: none; }
-    #fx-dials {
+    #fx-panel.hidden, #kino-panel.hidden { display: none; }
+    #fx-dials, #kn-dials {
       display: flex;
       flex-direction: column;
       gap: 10px;
     }
-    #fx-dials .tune-label {
+    #fx-dials .tune-label, #kn-dials .tune-label {
       font-size: 0.55rem;
       width: 58px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    #fx-dials input[type=range] { min-width: 0; }
-    #fx-dials .tune-val { flex-shrink: 0; }
+    #fx-dials input[type=range], #kn-dials input[type=range] { min-width: 0; }
+    #fx-dials .tune-val, #kn-dials .tune-val { flex-shrink: 0; }
     #glass-panel {
       position: fixed;
       top: 52px;
@@ -1079,6 +1079,7 @@
     <option value="prism">PRISM</option>
     <option value="fx">STUDIO</option>
     <option value="type">TYPE</option>
+    <option value="kino">KINO</option>
     <option value="physarum">MYCELIUM</option>
     <option value="aurora">AURORA</option>
     <option value="fireflies">FIREFLIES</option>
@@ -1365,6 +1366,43 @@
   </div>
   <div class="tune-divider"></div>
   <div id="fx-dials"></div>
+  <div class="tune-divider"></div>
+  <div class="media-head">
+    <span class="tune-label">Playlist</span>
+    <button class="btn-add-media" title="Load your images/videos">+ MEDIA</button>
+  </div>
+  <div class="media-list"></div>
+</div>
+
+
+<div id="kino-panel" class="hidden">
+  <div class="train-title">KINO</div>
+  <div class="tune-row">
+    <span class="tune-label">Mode</span>
+    <select class="band-select" id="kn-mode" style="flex:1">
+      <option value="0" selected>text halftone</option>
+      <option value="1">edge ascii</option>
+      <option value="2">stipple</option>
+      <option value="3">flow field</option>
+      <option value="4">scribbles</option>
+      <option value="5">text flow</option>
+      <option value="6">scatter field</option>
+      <option value="7">pixel sort</option>
+    </select>
+  </div>
+  <div class="tune-row">
+    <input type="text" id="kn-text" value="BLOOM" spellcheck="false" maxlength="60" placeholder="words as glyphs..."
+           style="flex:1;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.15);
+                  border-radius:4px;color:#ddd;padding:5px 8px;font-size:0.7rem;
+                  font-family:'SF Mono',Menlo,monospace;outline:none">
+  </div>
+  <div class="tune-row">
+    <span class="tune-label">React</span>
+    <input type="range" id="kn-react" min="0" max="2" step="0.05" value="1">
+    <span class="tune-val" id="kn-v-react">1.00</span>
+  </div>
+  <div class="tune-divider"></div>
+  <div id="kn-dials"></div>
   <div class="tune-divider"></div>
   <div class="media-head">
     <span class="tune-label">Playlist</span>

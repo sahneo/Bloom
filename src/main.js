@@ -31,6 +31,7 @@ import { AuroraPreset }       from './presets/aurora.js';
 import { FirefliesPreset }    from './presets/fireflies.js';
 import { FrostPreset }        from './presets/frost.js';
 import { AbyssPreset }        from './presets/abyss.js';
+import { KinoPreset, KINO_DIALS } from './presets/kino.js';
 import { WledSync }           from './wled.js';
 import { GestureControl }     from './gesture.js';
 import posthogLib from 'posthog-js';
@@ -777,6 +778,7 @@ async function init() {
     aurora:       AuroraPreset,
     fireflies:    FirefliesPreset,
     abyss:        AbyssPreset,
+    kino:         KinoPreset,
     frost:        FrostPreset,
   };
   const modeSelect = document.getElementById('mode-select');
@@ -790,6 +792,7 @@ async function init() {
     document.getElementById('glass-panel').classList.toggle('hidden', mode !== 'glass');
     document.getElementById('btn-prism-env').style.display = mode === 'prism' ? '' : 'none';
     document.getElementById('fx-panel').classList.toggle('hidden', mode !== 'fx');
+    document.getElementById('kino-panel').classList.toggle('hidden', mode !== 'kino');
     document.getElementById('type-panel').classList.toggle('hidden', mode !== 'type');
   }
   updateModeControls('particles');
@@ -954,6 +957,42 @@ async function init() {
   document.getElementById('fx-react').addEventListener('input', e => {
     params.fxReact = parseFloat(e.target.value);
     document.getElementById('fx-v-react').textContent = parseFloat(e.target.value).toFixed(2);
+  });
+  // KINO panel (kinotype-style modes) — dial sets come from the preset module
+  params.knP = KINO_DIALS[0].map(d => d[1]);
+  const knDialsEl = document.getElementById('kn-dials');
+  function renderKnDials() {
+    const m = params.knMode ?? 0;
+    params.knP = KINO_DIALS[m].map(d => d[1]);
+    knDialsEl.textContent = '';
+    KINO_DIALS[m].forEach(([label, def], i) => {
+      const row = document.createElement('div');
+      row.className = 'tune-row';
+      const lb = document.createElement('span');
+      lb.className = 'tune-label';
+      lb.textContent = label;
+      const sl = document.createElement('input');
+      sl.type = 'range'; sl.min = '0'; sl.max = '1'; sl.step = '0.02'; sl.value = def;
+      const vl = document.createElement('span');
+      vl.className = 'tune-val';
+      vl.textContent = def.toFixed(2);
+      sl.addEventListener('input', () => {
+        params.knP[i] = parseFloat(sl.value);
+        vl.textContent = parseFloat(sl.value).toFixed(2);
+      });
+      row.append(lb, sl, vl);
+      knDialsEl.append(row);
+    });
+  }
+  document.getElementById('kn-mode').addEventListener('change', e => {
+    params.knMode = parseInt(e.target.value, 10);
+    renderKnDials();
+  });
+  renderKnDials();
+  document.getElementById('kn-text').addEventListener('input', e => { params.knText = e.target.value; });
+  document.getElementById('kn-react').addEventListener('input', e => {
+    params.knReact = parseFloat(e.target.value);
+    document.getElementById('kn-v-react').textContent = parseFloat(e.target.value).toFixed(2);
   });
   // TYPE panel
   document.getElementById('ty-text').addEventListener('input', e => { params.tyText = e.target.value; });
