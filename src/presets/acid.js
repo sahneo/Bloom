@@ -187,7 +187,7 @@ export class AcidPreset {
     // ── kick → one impulse jet near a lamp, rate-limited 0.35 s ──────────
     const kick = bands.kick ?? 0;
     this._jetGap += dt;
-    if (kick > 0.5 && this._prevKick <= 0.5 && this._jetGap > 0.35) {
+    if (kick > 0.42 && this._prevKick <= 0.42 && this._jetGap > 0.24) {
       this._jetGap = 0;
       const lamp = this._lamps[(Math.random() * 3) | 0];
       const a = Math.random() * Math.PI * 2;
@@ -196,7 +196,7 @@ export class AcidPreset {
         y: lamp.y + (Math.random() - 0.5) * 0.08,
         dx: Math.cos(a), dy: Math.sin(a),
       };
-      this._jetEnv = Math.min(0.55 + kick * 0.5, 1.05);
+      this._jetEnv = Math.min(0.85 + kick * 0.7, 1.6);
     }
     this._prevKick = kick;
     this._jetEnv *= Math.exp(-dt * 9);      // ~110 ms of push; the vortex outlives it
@@ -228,7 +228,7 @@ export class AcidPreset {
     this._tapEnv *= Math.exp(-dt * 5);
 
     // ── lamps wander slowly; bass is their heat ──────────────────────────
-    const heat = (0.24 + this._env.bass * 1.15) * (1 - this._quiet * 0.28);
+    const heat = (0.24 + this._env.bass * 1.7) * (1 - this._quiet * 0.28);
     const easeL = 1 - Math.exp(-dt * 0.5);
     for (let i = 0; i < 3; i++) {
       const s = this._seed + i * 17.9;
@@ -272,7 +272,7 @@ export class AcidPreset {
       e[4 + i * 4] = L.x; e[5 + i * 4] = L.y; e[6 + i * 4] = L.heat;
     }
     e[7]  = lampR;
-    e[11] = this._env.mid;                                   // stir
+    e[11] = this._env.mid * 1.5;                             // stir
     e[15] = Math.exp(-dt * (0.9 - tension * 0.62));          // velocity damping
     e[16] = this._jet.x;  e[17] = this._jet.y;  e[18] = this._jet.dx; e[19] = this._jet.dy;
     e[20] = this._jetEnv; e[21] = this._dropEnv; e[22] = this._tapEnv; e[23] = this._dropDyeEnv;
@@ -290,7 +290,7 @@ export class AcidPreset {
     e[51] = energy;
     e[52] = this._cBg[0]; e[53] = this._cBg[1]; e[54] = this._cBg[2];
     e[55] = 0.55;                                            // grain (light)
-    e[56] = 55;                                              // buoyancy
+    e[56] = 78;                                              // buoyancy
     e[57] = 2.4;                                             // dye injection rate
     e[58] = Math.exp(-dt * 0.16);                            // dye dissipation
     e[59] = Math.exp(-dt * 0.60);                            // heat dissipation
