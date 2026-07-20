@@ -97,6 +97,11 @@ export class AudioAnalyser {
     this._buffer = buf;
     this._pauseOffset = 0;
     this._ensureChromaAnalyser();
+    this._ensureOnsetWorklet().then(() => {
+      if (this._onsetNode && this._fileSource) {
+        try { this._fileSource.connect(this._onsetNode); } catch (_) {}
+      }
+    });
     this._startSource(0);
   }
 
@@ -174,6 +179,7 @@ export class AudioAnalyser {
     this._fileSource.loop   = false;
     this._fileSource.connect(this.analyser);
     try { this._fileSource.connect(this.chromaAnalyser); } catch (_) {}
+    if (this._onsetNode) { try { this._fileSource.connect(this._onsetNode); } catch (_) {} }
     this._connectStereo(this._fileSource);
     if (this._mediaStreamDest) {
       try { this._fileSource.connect(this._mediaStreamDest); } catch (_) {}
@@ -206,6 +212,9 @@ export class AudioAnalyser {
     const source = this.context.createMediaStreamSource(stream);
     this._activeStreamSource = source;
     source.connect(this.analyser);
+    this._ensureOnsetWorklet().then(() => {
+      if (this._onsetNode) { try { source.connect(this._onsetNode); } catch (_) {} }
+    });
     try {
       this._ensureChromaAnalyser();
       source.connect(this.chromaAnalyser);
@@ -243,6 +252,40 @@ export class AudioAnalyser {
 
   _ensureContext() {
     if (!this.context) this.context = new AudioContext();
+  }
+
+  // Optional low-latency onset path: an AudioWorklet detects kick/snare
+  // transients on the audio thread and streams the freshest values. If the
+  // worklet can't load (older browser, module error) the app silently keeps
+  // using the rAF FFT path — nothing downstream depends on it existing.
+  async _ensureOnsetWorklet() {
+    if (this._onsetNode || this._onsetFailed) return;
+    try {
+      // Served verbatim from public/ (Vite won't emit a side-effect-only
+      // worklet module from src/); base-relative so it resolves under any deploy path
+      await this.context.audioWorklet.addModule(import.meta.env.BASE_URL + 'onset-worklet.js');
+      this._onsetNode = new AudioWorkletNode(this.context, 'onset-processor');
+      this._onsetNode.connect(this.context.destination, 0);   // 0 channels out = silent sink keeps it alive
+      this._liveKick = 0; this._liveSnare = 0;
+      this._liveKickMax = 0.001; this._liveSnareMax = 0.001;
+      this._liveKickBase = 0; this._liveSnareBase = 0;
+      this._onsetNode.port.onmessage = (e) => {
+        const { k, s } = e.data;
+        this._liveKickMax  = Math.max(this._liveKickMax  * 0.9995, k + 1e-5);
+        this._liveSnareMax = Math.max(this._liveSnareMax * 0.9995, s + 1e-5);
+        this._liveKickBase  = this._liveKickBase  * 0.98 + (k / this._liveKickMax)  * 0.02;
+        this._liveSnareBase = this._liveSnareBase * 0.98 + (s / this._liveSnareMax) * 0.02;
+        const kn = Math.max(0, k / this._liveKickMax  - this._liveKickBase)  * 6;
+        const sn = Math.max(0, s / this._liveSnareMax - this._liveSnareBase) * 6;
+        // peak-hold with fast decay — the main loop reads the latest peak
+        this._liveKick  = Math.max(Math.min(kn, 1), this._liveKick  * 0.6);
+        this._liveSnare = Math.max(Math.min(sn, 1), this._liveSnare * 0.6);
+      };
+      this.hasLiveOnset = true;
+    } catch (e) {
+      this._onsetFailed = true;
+      console.warn('onset worklet unavailable, using FFT path:', e.message);
+    }
   }
 
   _ensureChromaAnalyser() {
@@ -314,6 +357,15 @@ export class AudioAnalyser {
 
     this._kick  = Math.max(Math.min(kickTransient,  1), this._kick  * 0.72);
     this._snare = Math.max(Math.min(snareTransient, 1), this._snare * 0.68);
+
+    // Prefer the audio-thread onset when available: it leads the FFT path by
+    // ~1-2 frames, so drum-driven visuals and beat phase land on the hit.
+    // Blend rather than replace — the FFT path carries the harmonic-gated
+    // kick score that rejects bass notes, which the raw band filter can't.
+    if (this.hasLiveOnset) {
+      this._kick  = Math.max(this._kick,  this._liveKick  * (0.5 + kickScore * 0.5));
+      this._snare = Math.max(this._snare, this._liveSnare * 0.9);
+    }
 
     const kickGate  = 1.0 - this._kick  * 0.85;
     const snareGate = 1.0 - this._snare * 0.70;
