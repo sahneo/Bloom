@@ -269,8 +269,11 @@ export class AudioAnalyser {
       this._liveKick = 0; this._liveSnare = 0;
       this._liveKickMax = 0.001; this._liveSnareMax = 0.001;
       this._liveKickBase = 0; this._liveSnareBase = 0;
+      this._onsetEvents = [];
+      this._evPrevK = 0; this._evPrevS = 0;
+      this._evLastK = -1; this._evLastS = -1;
       this._onsetNode.port.onmessage = (e) => {
-        const { k, s } = e.data;
+        const { k, s, t } = e.data;
         this._liveKickMax  = Math.max(this._liveKickMax  * 0.9995, k + 1e-5);
         this._liveSnareMax = Math.max(this._liveSnareMax * 0.9995, s + 1e-5);
         this._liveKickBase  = this._liveKickBase  * 0.98 + (k / this._liveKickMax)  * 0.02;
@@ -280,12 +283,42 @@ export class AudioAnalyser {
         // peak-hold with fast decay — the main loop reads the latest peak
         this._liveKick  = Math.max(Math.min(kn, 1), this._liveKick  * 0.6);
         this._liveSnare = Math.max(Math.min(sn, 1), this._liveSnare * 0.6);
+        // Discrete onset EVENTS stamped with the block's audio-clock time —
+        // the beat tracker votes phase at the true hit instant instead of the
+        // frame instant (up to a frame + FFT window late). Rising edge with a
+        // refractory period; thresholds sit high so only solid hits anchor.
+        if (kn > 0.45 && this._evPrevK <= 0.45 && t - this._evLastK > 0.10) {
+          this._evLastK = t;
+          this._onsetEvents.push({ t, kick: Math.min(kn, 1), snare: 0 });
+          if (this._onsetEvents.length > 64) this._onsetEvents.shift();
+        }
+        if (sn > 0.5 && this._evPrevS <= 0.5 && t - this._evLastS > 0.10) {
+          this._evLastS = t;
+          this._onsetEvents.push({ t, kick: 0, snare: Math.min(sn, 1) });
+          if (this._onsetEvents.length > 64) this._onsetEvents.shift();
+        }
+        this._evPrevK = kn;
+        this._evPrevS = sn;
       };
       this.hasLiveOnset = true;
     } catch (e) {
       this._onsetFailed = true;
       console.warn('onset worklet unavailable, using FFT path:', e.message);
     }
+  }
+
+  // Worklet onset events converted to "seconds ago as HEARD by the user".
+  // File playback: the worklet sees samples outputLatency before the speakers
+  // do, so that lag is subtracted. Captured system audio: the capture delay is
+  // unknowable here — the Sync ms slider covers that residual.
+  drainOnsetEvents() {
+    const q = this._onsetEvents;
+    if (!q || q.length === 0) return [];
+    this._onsetEvents = [];
+    const now = this.context.currentTime;
+    const oL  = this._fileSource ? (this.context.outputLatency || 0) : 0;
+    for (const ev of q) ev.ago = Math.max(0, now - ev.t - oL);
+    return q;
   }
 
   _ensureChromaAnalyser() {

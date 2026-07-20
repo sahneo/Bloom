@@ -20,6 +20,7 @@ const MAX_LAG   = 100;
 const ACF_LAG   = 400;        // up to 4× the slowest candidate (comb harmonics)
 const ANALYZE_S = 2;
 const OFF_COMB  = 0.15;       // mild off-beat subtraction; 0.7 favored 3:2 impostors on 8th-hats
+const FFT_LAT   = 0.035;      // frame-path onsets lag the true hit ~35 ms (FFT window centroid + frame)
 
 export class BeatTracker {
   constructor() {
@@ -47,6 +48,10 @@ export class BeatTracker {
     this._phY = 0;
     this._scoreEma     = new Float32Array(MAX_LAG + 1);  // evidence across analyses
     this._lastLoggedBpm = 0;
+    this._shiftEma      = 0;  // 2nd-order PLL: one-sided phase corrections = period bias
+    this._acfPeriod     = 0;  // latest ACF opinion — anchors how far the PLL may trim
+    this._nowS          = 0;
+    this._lastPreciseAt = -10; // when the last worklet onset event arrived
   }
 
   get bpm() { return 60 / this.period; }
@@ -83,8 +88,71 @@ export class BeatTracker {
     return ((this.beatT - this._barOffset) % 4 + 4) % 4;
   }
 
+  // Precise onset from the AudioWorklet path: the hit happened agoS seconds
+  // before now (already corrected for output latency by the caller). Votes
+  // phase at the HIT time — frame-time votes are a frame + FFT window late,
+  // which is exactly the on-screen misalignment at higher tempos.
+  onsetEvent(agoS, kickMag, snareMag) {
+    this._lastPreciseAt = this._nowS;
+    const w = Math.min(kickMag + snareMag * 0.8, 1);
+    // Sharpen the ACF input too: deposit the hit into the envelope ring at
+    // its true position (the frame path smears it into a later 10 ms bin).
+    // Triangular 3-bin kernel, not a single bin — single-bin spikes make the
+    // ACF peaks so narrow that integer-lag comb sampling misses them when the
+    // true period isn't bin-aligned (measured: 174 BPM collapsed to half-tempo).
+    const binsAgo = Math.min(Math.round(agoS * ENV_HZ), ENV_LEN - 1);
+    if (this._envPos > binsAgo + 1) {
+      for (let o = -1; o <= 1; o++) {
+        const idx = (((this._envPos - 1 - binsAgo + o) % ENV_LEN) + ENV_LEN) % ENV_LEN;
+        const dep = w * (o === 0 ? 1 : 0.5);
+        this._env[idx] = Math.max(this._env[idx], dep);
+      }
+    }
+    if (w < 0.25 || this.conf <= 0.15) return;
+    const ph = (((this.beatT - agoS / this.period) % 1) + 1) % 1;
+    this._votePhase(ph, w, 0.45);
+  }
+
+  // Shared phase-vote: circular mean + correction pull + 2nd-order PLL.
+  // ph in beats [0..1), w = vote weight, pull = correction gain per vote.
+  _votePhase(ph, w, pull) {
+    const ang = ph * 2 * Math.PI;
+    this._phX = this._phX * 0.9 + Math.cos(ang) * w;
+    this._phY = this._phY * 0.9 + Math.sin(ang) * w;
+    const mag = Math.hypot(this._phX, this._phY);
+    if (mag <= 0.8) return;
+    // Mean onset phase relative to the predicted beat, in beats (-0.5..0.5]
+    const meanErr = Math.atan2(this._phY, this._phX) / (2 * Math.PI);
+    const shift   = meanErr * pull * Math.min(mag / 3, 1);
+    this.beatT -= shift;
+    // 2nd-order PLL: phase corrections that stay one-sided mean the PERIOD
+    // is biased (ACF bins are 10 ms — up to ~1% tempo error survives the
+    // parabolic fit), and a 1st-order pull then chases a drift it can never
+    // finish. Trim the period a little in the drift's direction; the ACF
+    // estimate stays the anchor (trim confined to ±5% of it, and skipped
+    // entirely if ACF currently disagrees with the running period — that's
+    // a metrical-impostor window, not a calibration signal).
+    // Gain sits just under critical damping (k2 ≈ k1²/4 per vote) — at 0.35
+    // the loop rang ±3 BPM around the true tempo with a ~12 s period.
+    this._shiftEma = this._shiftEma * 0.85 + shift * 0.15;
+    if (this.conf > 0.3 && this._acfPeriod > 0
+        && Math.abs(this._acfPeriod - this.period) / this.period < 0.1) {
+      const trim = Math.max(-0.0015, Math.min(0.0015, this._shiftEma * 0.10));
+      this.period = Math.max(this._acfPeriod * 0.95,
+                    Math.min(this._acfPeriod * 1.05, this.period * (1 + trim)));
+    }
+    // Rotate accumulated votes along with the grid so they don't
+    // re-report the offset we just corrected
+    const rot = -shift * 2 * Math.PI;
+    const nx  = this._phX * Math.cos(rot) - this._phY * Math.sin(rot);
+    const ny  = this._phX * Math.sin(rot) + this._phY * Math.cos(rot);
+    this._phX = nx;
+    this._phY = ny;
+  }
+
   // Call every frame with raw kick/snare/high envelopes (0..1), dt in seconds.
   update(timeS, kick, snare, high, dt, flux = 0) {
+    this._nowS = timeS;
     // Onset strength = positive derivatives (transients, not sustained level).
     // High band (hats) is essential: with a half-time kick the quarter-note
     // grid lives ONLY in the hats — kick+snare alone honestly report half tempo.
@@ -120,32 +188,21 @@ export class BeatTracker {
       this._envAcc = 0;
     }
 
-    // Phase lock: strong KICK/SNARE onsets vote for the grid offset via a
-    // circular mean (vector average of onset phases). A proportional pull with
-    // a dead zone gets stuck when the grid settles ~half a beat off (measured:
-    // phase 0.44 at true kicks, correction weight 0 there) — the circular mean
-    // converges from ANY initial offset. Hats are excluded — offbeat hats
-    // (house!) would drag phase half a beat.
+    // Phase lock (frame path): strong KICK/SNARE onsets vote for the grid
+    // offset via a circular mean (vector average of onset phases). A
+    // proportional pull with a dead zone gets stuck when the grid settles
+    // ~half a beat off (measured: phase 0.44 at true kicks, correction weight
+    // 0 there) — the circular mean converges from ANY initial offset. Hats
+    // are excluded — offbeat hats (house!) would drag phase half a beat.
+    // These envelope onsets observe the hit ~FFT_LAT late, so the vote is
+    // cast at the phase the grid had back at the true hit time. Muted while
+    // the AudioWorklet supplies precise events (onsetEvent) — the two paths
+    // see the same hits at different times and would fight over the grid.
+    const precise   = timeS - this._lastPreciseAt < 2;
     const phasePull = dK + dS * 0.8;
-    if (phasePull > 0.25 && this.conf > 0.15) {
-      const ang = (this.beatT % 1) * 2 * Math.PI;
-      const w   = Math.min(phasePull, 1);
-      this._phX = this._phX * 0.9 + Math.cos(ang) * w;
-      this._phY = this._phY * 0.9 + Math.sin(ang) * w;
-      const mag = Math.hypot(this._phX, this._phY);
-      if (mag > 0.8) {
-        // Mean onset phase relative to the predicted beat, in beats (-0.5..0.5]
-        const meanErr = Math.atan2(this._phY, this._phX) / (2 * Math.PI);
-        const shift   = meanErr * 0.25 * Math.min(mag / 3, 1);
-        this.beatT -= shift;
-        // Rotate accumulated votes along with the grid so they don't
-        // re-report the offset we just corrected
-        const rot = -shift * 2 * Math.PI;
-        const nx  = this._phX * Math.cos(rot) - this._phY * Math.sin(rot);
-        const ny  = this._phX * Math.sin(rot) + this._phY * Math.cos(rot);
-        this._phX = nx;
-        this._phY = ny;
-      }
+    if (!precise && phasePull > 0.25 && this.conf > 0.15) {
+      const ph = (((this.beatT - FFT_LAT / this.period) % 1) + 1) % 1;
+      this._votePhase(ph, Math.min(phasePull, 1), 0.25);
     }
 
     if (timeS - this._lastAnalysis > ANALYZE_S) {
@@ -262,6 +319,7 @@ export class BeatTracker {
     let shift = den !== 0 ? 0.5 * (y1 - y3) / den : 0;
     shift = Math.max(-0.5, Math.min(0.5, shift));
     const newPeriod = (bestLag + shift) / ENV_HZ;
+    this._acfPeriod = newPeriod;   // PLL trim anchor (see _votePhase)
 
     // Confidence from peak prominence over the candidate range
     let avg = 0;
@@ -278,7 +336,13 @@ export class BeatTracker {
     // genuinely new tempo a few seconds late is invisible.
     const rel = Math.abs(newPeriod - this.period) / this.period;
     if (rel < 0.05) {
-      this.period = this.period * 0.65 + newPeriod * 0.35;
+      // While the worklet PLL is actively calibrating the period against
+      // real hit times, the quantized ACF opinion gets less say — otherwise
+      // every 2 s analysis drags the period back to the nearest 10 ms bin
+      // and re-introduces the drift the PLL just cancelled.
+      const pll   = this._nowS - this._lastPreciseAt < 2 && this.conf > 0.5;
+      const blend = pll ? 0.15 : 0.35;
+      this.period = this.period * (1 - blend) + newPeriod * blend;
       this._candVotes = 0;
       this.conf += (targetConf - this.conf) * 0.5;
     } else if (this.conf < 0.3) {
