@@ -20,6 +20,9 @@ export class WledSync {
     this._inflight = false;
     this._fails    = 0;
     this._q        = '';
+    // Optional frame source: (leds, nowMs) → Uint8Array leds*3, already
+    // LED-ready. When set, the canvas mirror path is skipped entirely.
+    this.source    = null;
   }
 
   // host: WLED IP/hostname, forwarded to the relay per request; empty string
@@ -47,6 +50,11 @@ export class WledSync {
     if (!this.active || this._inflight || nowMs - this._lastMs < FRAME_MS) return;
     this._lastMs = nowMs;
 
+    if (this.source) {
+      this._send(this.source(this.leds, nowMs));
+      return;
+    }
+
     this._ctx.drawImage(this.canvas, 0, 0, this.leds, SAMPLE_ROWS);
     const px  = this._ctx.getImageData(0, 0, this.leds, SAMPLE_ROWS).data;
     const out = new Uint8Array(this.leds * 3);
@@ -70,6 +78,10 @@ export class WledSync {
       out[i * 3 + 2] = Math.pow(Math.min(Math.max(b, 0), 255) / 255, 0.80) * 255;
     }
 
+    this._send(out);
+  }
+
+  _send(out) {
     this._inflight = true;
     fetch(`${this.relay}/frame${this._q}`, { method: 'POST', body: out })
       .then(() => { this._fails = 0; })

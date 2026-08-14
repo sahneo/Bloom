@@ -301,7 +301,7 @@
     }
     #genre-select:hover, #bank-select:hover { opacity: 0.65; }
     #genre-select.set   { opacity: 0.85; border-color: rgba(255,255,255,0.35); }
-    #mode-select {
+    #mode-select, #wled-mode {
       padding: 5px 8px;
       font-size: 0.62rem;
       letter-spacing: 0.10em;
@@ -315,7 +315,8 @@
       cursor: pointer;
       -webkit-appearance: none;
     }
-    #mode-select:hover { opacity: 0.75; }
+    #mode-select:hover, #wled-mode:hover { opacity: 0.75; }
+    #wled-mode { opacity: 0.22; }
     #wled-host {
       width: 106px;
       padding: 5px 8px;
@@ -1114,6 +1115,10 @@
   <button id="btn-cam" title="Gesture control: hand pans, pinch zooms, swipe pops (webcam)">CAM</button>
   <input id="wled-host" type="text" placeholder="WLED IP" spellcheck="false"
          title="Address of your WLED device (e.g. 192.168.1.19)">
+  <select id="wled-mode" title="SCRN mirrors the visuals; KEYS plays the strip from your MIDI keyboard — each key lights its own spot, pads flash the whole strip, mod wheel sets the afterglow">
+    <option value="screen">SCRN</option>
+    <option value="keys">KEYS</option>
+  </select>
   <button id="btn-wled" title="Mirror visuals to a WLED strip (needs local relay: node tools/wled-relay.mjs)">WLED</button>
   <button id="btn-help" title="Tutorial">?</button>
 </div>

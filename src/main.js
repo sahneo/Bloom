@@ -35,6 +35,7 @@ import { KinoPreset, KINO_DIALS } from './presets/kino.js';
 import { BzPreset }           from './presets/bz.js';
 import { PendulumPreset }     from './presets/pendulum.js';
 import { WledSync }           from './wled.js';
+import { WledKeys }           from './wledkeys.js';
 import { GestureControl }     from './gesture.js';
 import posthogLib from 'posthog-js';
 
@@ -559,16 +560,22 @@ const audio    = new AudioAnalyser();
 const harmony  = new HarmonyAnalyzer({ bufferMs: 3000 });
 const ripples  = new RippleManager();
 let   lastMidiMs = 0;   // timestamp of most recent MIDI note-on
+const wledKeys = new WledKeys();
 const midi     = new MIDIHandler({
-  onNoteOn:  (pitch, velocity) => {
+  onNoteOn:  (pitch, velocity, channel) => {
+    wledKeys.noteOn(pitch, velocity, channel);
+    if (channel === 9) return;   // drum pads light the strip but must not pollute harmony
     harmony.noteOn(pitch, velocity);
     ripples.spawn(pitch);
     lastMidiMs = performance.now();
     // universal impulse: every mode answers a played note, no mapping needed
     params.zoomPunch = Math.max(params.zoomPunch ?? 0, (velocity / 127) * 0.25);
   },
-  onNoteOff: (pitch) => harmony.noteOff(pitch),
-  onCC:      (cc, value) => handleMidiCC(cc, value),
+  onNoteOff: (pitch, channel) => {
+    wledKeys.noteOff(pitch, channel);
+    if (channel !== 9) harmony.noteOff(pitch);
+  },
+  onCC:      (cc, value) => { wledKeys.cc(cc, value); handleMidiCC(cc, value); },
 });
 
 // ── MIDI learn: hardware knobs → Tune sliders ────────────────────────
@@ -698,6 +705,21 @@ btnWled.addEventListener('click', async () => {
 });
 wledHost.addEventListener('keydown', e => { if (e.key === 'Enter') btnWled.click(); });
 
+// SCRN mirrors the canvas; KEYS turns the strip into a MIDI instrument —
+// Launchkey notes light their own spots (connect MIDI for this to do anything)
+const wledMode = document.getElementById('wled-mode');
+wledMode.value = localStorage.getItem('bloom-wled-mode') ?? 'screen';
+const applyWledMode = () => {
+  wled.source = wledMode.value === 'keys'
+    ? (leds, nowMs) => wledKeys.render(nowMs, leds)
+    : null;
+};
+applyWledMode();
+wledMode.addEventListener('change', () => {
+  localStorage.setItem('bloom-wled-mode', wledMode.value);
+  applyWledMode();
+});
+
 // ── Projector: mirror the canvas into a clean second window ──────────
 // canvas.captureStream costs nothing extra on the GPU — the projector
 // window is just a fullscreen <video>. Drag it to the second display and
@@ -740,7 +762,7 @@ btnProj.addEventListener('click', () => {
 });
 
 // Debug/test handle — lets automated tests read live analysis state
-window.__bloom = { beat, harmony, audio, params, structure, autovj, drift, midiCC: handleMidiCC };
+window.__bloom = { beat, harmony, audio, params, structure, autovj, drift, midiCC: handleMidiCC, wledKeys, wled };
 
 // ── Preset / mode ────────────────────────────────────────────────────
 let currentMode = 'particles';  // 'particles' | 'oscilloscope' | 'ascii' | 'silk' | 'flora'
@@ -1581,7 +1603,7 @@ async function init() {
   // SHARE snapshots the mode + every control into a base64url hash and
   // copies the link; opening such a link restores the exact look.
   const SHARE_SKIP = new Set(['mode-select', 'media-input', 'file-input',
-                              'wled-host', 'ty-color', 'transport-scrub']);
+                              'wled-host', 'wled-mode', 'ty-color', 'transport-scrub']);
   function snapshotPreset() {
     const els = {};
     for (const el of document.querySelectorAll('input[id], select[id]')) {
