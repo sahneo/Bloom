@@ -695,6 +695,7 @@ btnWled.addEventListener('click', async () => {
     btnWled.textContent = 'WLED';
     btnWled.classList.add('active');
     btnWled.title = `Mirroring to "${info.name}" (${info.leds} LEDs)`;
+    loadZones();   // saved corner map applies as soon as we know the strip
     posthog.capture('wled_connected', { leds: info.leds });
   } catch (e) {
     btnWled.textContent = 'WLED ✕';
@@ -709,7 +710,9 @@ wledHost.addEventListener('keydown', e => { if (e.key === 'Enter') btnWled.click
 // Launchkey notes light their own spots (connect MIDI for this to do anything)
 const wledMode = document.getElementById('wled-mode');
 wledMode.value = localStorage.getItem('bloom-wled-mode') ?? 'screen';
+let calib = null;   // zone calibration state — declared here so applyWledMode can see it
 const applyWledMode = () => {
+  if (calib) return;   // calibration owns the strip until it finishes
   wled.source = wledMode.value === 'keys'
     ? (leds, nowMs) => wledKeys.render(nowMs, leds)
     : null;
@@ -718,6 +721,85 @@ applyWledMode();
 wledMode.addEventListener('change', () => {
   localStorage.setItem('bloom-wled-mode', wledMode.value);
   applyWledMode();
+});
+
+// ── WLED zone calibration ────────────────────────────────────────────
+// The chain snakes around real furniture (wall run → drop → shelves), so
+// raw LED order means nothing spatially. A white cursor sweeps the strip;
+// marking each physical corner splits the chain into zones for KEYS mode.
+const btnZones  = document.getElementById('btn-zones');
+const zonePanel = document.getElementById('zone-panel');
+const zoneInfo  = document.getElementById('zone-info');
+
+function zonesFromBounds(bounds, leds) {
+  const bs = [...new Set(bounds.map(Math.round))]
+    .filter(b => b > 0 && b < leds).sort((a, b) => a - b);
+  const zones = [];
+  let s = 0;
+  for (const b of bs) { zones.push({ s, e: b - 1 }); s = b; }
+  zones.push({ s, e: leds - 1 });
+  return zones;
+}
+
+function loadZones() {
+  try {
+    const z = JSON.parse(localStorage.getItem('bloom-wled-zones') ?? 'null');
+    // a saved map only fits the strip it was measured on
+    wledKeys.setZones(z && z.leds === wled.leds ? zonesFromBounds(z.bounds, wled.leds) : null);
+  } catch (_) { wledKeys.setZones(null); }
+}
+
+function calibSource(leds, nowMs) {
+  const dt = Math.min(Math.max((nowMs - calib.lastMs) / 1000, 0), 0.1);
+  calib.lastMs = nowMs;
+  if (nowMs > calib.holdUntil) calib.idx = (calib.idx + dt * 18) % leds;
+  const out = new Uint8Array(leds * 3);
+  for (const m of calib.marks) out[m * 3] = 255;              // marked corners: red
+  const c = Math.floor(calib.idx);
+  for (let d = -1; d <= 1; d++) {
+    const i = (c + d + leds) % leds;
+    const v = d === 0 ? 255 : 90;
+    out[i * 3] = out[i * 3 + 1] = out[i * 3 + 2] = v;         // cursor: white
+  }
+  zoneInfo.textContent = `LED ${c} / ${leds} · corners: ${calib.marks.join(', ') || '—'}`;
+  return out;
+}
+
+function endCalib(save) {
+  if (save && calib.marks.length) {
+    localStorage.setItem('bloom-wled-zones',
+      JSON.stringify({ leds: wled.leds, bounds: calib.marks }));
+    posthog.capture('wled_zones_set', { zones: calib.marks.length + 1 });
+  }
+  calib = null;
+  zonePanel.classList.add('hidden');
+  btnZones.classList.remove('active');
+  loadZones();
+  applyWledMode();
+}
+
+btnZones.addEventListener('click', () => {
+  if (calib) return endCalib(true);
+  if (!wled.active) {           // needs a live strip to sweep
+    btnZones.textContent = 'ZONES ✕';
+    btnZones.title = 'Connect WLED first — calibration sweeps the actual strip';
+    setTimeout(() => { btnZones.textContent = 'ZONES'; }, 1500);
+    return;
+  }
+  calib = { idx: 0, marks: [], lastMs: performance.now(), holdUntil: 0 };
+  zonePanel.classList.remove('hidden');
+  btnZones.classList.add('active');
+  wled.source = calibSource;
+});
+
+window.addEventListener('keydown', e => {
+  if (!calib) return;
+  if (e.code === 'Space')      { e.preventDefault(); calib.marks.push(Math.floor(calib.idx)); }
+  if (e.code === 'ArrowRight') { e.preventDefault(); calib.idx = Math.min(calib.idx + 1, wled.leds - 1); calib.holdUntil = performance.now() + 1500; }
+  if (e.code === 'ArrowLeft')  { e.preventDefault(); calib.idx = Math.max(calib.idx - 1, 0);            calib.holdUntil = performance.now() + 1500; }
+  if (e.code === 'Backspace')  { e.preventDefault(); calib.marks.pop(); }
+  if (e.code === 'Enter')      { e.preventDefault(); endCalib(true); }
+  if (e.code === 'Escape')     { e.preventDefault(); endCalib(false); }
 });
 
 // ── Projector: mirror the canvas into a clean second window ──────────

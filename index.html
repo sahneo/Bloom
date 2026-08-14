@@ -351,6 +351,26 @@
     }
     #debug.hidden { display: none; }
 
+    /* ── WLED zone calibration panel ─────────────────────────────── */
+    #zone-panel {
+      position: fixed;
+      bottom: 44px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.78);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 8px;
+      padding: 12px 18px;
+      text-align: center;
+      font-family: 'SF Mono', 'Menlo', monospace;
+      font-size: 0.7rem;
+      color: #ddd;
+      letter-spacing: 0.06em;
+      z-index: 60;
+    }
+    #zone-panel.hidden { display: none; }
+    #zone-panel .zone-hint { margin-top: 6px; opacity: 0.5; font-size: 0.58rem; }
+
     /* ── BPM / metronome widget ──────────────────────────────────── */
     #bpm-widget {
       position: fixed;
@@ -1120,7 +1140,13 @@
     <option value="keys">KEYS</option>
   </select>
   <button id="btn-wled" title="Mirror visuals to a WLED strip (needs local relay: node tools/wled-relay.mjs)">WLED</button>
+  <button id="btn-zones" title="Teach Bloom your strip's layout: a white cursor sweeps the chain — press Space at every corner (wall→ceiling, shelf edges). KEYS then plays zones: low keys wash the first run, high keys the last">ZONES</button>
   <button id="btn-help" title="Tutorial">?</button>
+</div>
+
+<div id="zone-panel" class="hidden">
+  <div id="zone-info">LED 0</div>
+  <div class="zone-hint">SPACE mark corner · ←/→ jog · ⌫ undo · ENTER save · ESC cancel</div>
 </div>
 
 <div id="debug" class="hidden">

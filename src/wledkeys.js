@@ -52,6 +52,15 @@ export class WledKeys {
     this._lastS   = 0;
     this._ambHue  = -1;         // hue of the last note — faint idle breathing
     this._ambPh   = 0;
+    this._zones   = null;       // [{s, e}] chain segments between physical corners
+  }
+
+  // Physical layout from calibration: with zones set, the keyboard registers
+  // split across zones in chain order (low keys → first run) and each note
+  // washes a wide patch of ITS zone only — indirect strips behind furniture
+  // read as glows, so zone washes beat pin-point sparks there
+  setZones(zones) {
+    this._zones = zones && zones.length > 1 ? zones : null;
   }
 
   noteOn(pitch, velocity, channel = 0) {
@@ -62,11 +71,26 @@ export class WledKeys {
       if (this._pads.length > 12) this._pads.shift();
       return;
     }
-    const t = (pitch - PITCH_LO) / (PITCH_HI - PITCH_LO);
+    const t = Math.min(Math.max((pitch - PITCH_LO) / (PITCH_HI - PITCH_LO), 0), 1);
+    let abs = null;
+    if (this._zones) {
+      const nz     = this._zones.length;
+      const zi     = Math.min(Math.floor(t * nz), nz - 1);
+      const within = Math.min(t * nz - zi, 1);
+      const z      = this._zones[zi];
+      const len    = z.e - z.s + 1;
+      abs = {
+        center: z.s + within * (len - 1),
+        sigma:  Math.max(len * (0.30 - 0.14 * within), 1.5),
+        lo: z.s,
+        hi: z.e,
+      };
+    }
     this._notes.set(pitch, {
       vel,
-      pos:   Math.min(Math.max(t, 0), 1),
-      sigma: 0.085 - 0.065 * Math.min(Math.max(t, 0), 1),  // bass wide, treble narrow
+      pos:   t,
+      sigma: 0.085 - 0.065 * t,  // bass wide, treble narrow
+      abs,
       hue:   pitchHue(pitch),
       onS:   now,
       offS:  0,
@@ -132,11 +156,12 @@ export class WledKeys {
       }
       const flash  = Math.exp(-(perf - n.onS) / FLASH_S) * n.vel; // white pop
       const sat    = Math.max(0.35, 0.95 - flash * 0.8);
-      const center = n.pos * (leds - 1);
-      const sigmaL = Math.max(n.sigma * leds, 1.2);
+      const center = n.abs ? n.abs.center : n.pos * (leds - 1);
+      const sigmaL = n.abs ? n.abs.sigma : Math.max(n.sigma * leds, 1.2);
       const span   = Math.ceil(sigmaL * 3);
-      const lo = Math.max(0, Math.floor(center - span));
-      const hi = Math.min(leds - 1, Math.ceil(center + span));
+      // glows stay inside their zone — a blob must not bleed around a corner
+      const lo = Math.max(n.abs ? n.abs.lo : 0,        Math.floor(center - span));
+      const hi = Math.min(n.abs ? n.abs.hi : leds - 1, Math.ceil(center + span));
       for (let i = lo; i <= hi; i++) {
         const g = Math.exp(-((i - center) ** 2) / (2 * sigmaL * sigmaL));
         const v = Math.min(amp * g * (1 + flash * 0.6), 1);
