@@ -1,0 +1,13 @@
+import { chromium, webkit, devices } from 'playwright';
+const tag = process.argv[2];
+const b = await chromium.launch({ channel:'chrome', headless:true, args:['--enable-unsafe-webgpu'] });
+const p = await b.newPage({ viewport:{width:1440,height:900} });
+await p.goto('http://localhost:5173/'); await p.waitForTimeout(2000);
+await p.screenshot({ path:`../shots-3d/ui-${tag}-desktop.png` }); await b.close();
+const w = await webkit.launch();
+const ctx = await w.newContext({ ...devices['iPhone 15'] });
+const m = await ctx.newPage(); const errs=[]; m.on('console', x => { if (x.type()==='error'||x.type()==='warning') errs.push(x.text()); }); m.on('pageerror', e=>errs.push('PE '+e.message));
+await m.goto('http://localhost:5173/'); await m.waitForTimeout(4000);
+console.log('webkit navigator.gpu:', await m.evaluate(() => !!navigator.gpu), 'mode:', await m.evaluate(() => document.getElementById('mode-select').value));
+await m.screenshot({ path:`../shots-3d/ui-${tag}-iphone.png` });
+console.log('errors:', errs.join('\n') || 'none'); await w.close();

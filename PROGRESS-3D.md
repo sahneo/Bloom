@@ -21,3 +21,11 @@ Worktree: ~/Documents/Bloom/Code-3d · shots: ~/Documents/Bloom/shots-3d/
 - ✅ Quality governor (wall-clock frame EMA, 4 tiers: scene-pass scale + crowd density, hysteresis).
 - ✅ tools/gen-test-track.mjs (126 BPM intro/groove/breakdown/build/drop) + tools/shoot.mjs (Playwright, Chrome WebGPU).
   Headless Chrome on Apple Silicon: 60 fps all looks at 2160×1350 canvas, 0 console errors. Drop detected at ~61 s.
+- ✅ UI v3: welcome card (1 Sound · 2 MIDI optional · 3 World, each button says what/why), Demo beat source
+  (src/demo-track.js renders the test track in-browser), HUD: ‹ WORLD › + palette (M), STAGE look chips + CAM,
+  live pills (audio/MIDI/BPM), AUTO-VJ, LOOK/OUTPUT/SETUP menus with captions, fullscreen, ? shortcuts sheet.
+  Idle auto-hide after 2.6 s (cursor too), H = hard hide (double-tap on touch), toast on world/look change.
+  All old element ids kept → main.js handlers, share links and preset bank unchanged.
+- ✅ Mobile (iPhone 15, Playwright WebKit, taps): no horizontal overflow, ☰ bottom sheet, 2-col palette; STAGE renders.
+- ✅ No-WebGPU fallback verified (navigator.gpu removed in WebKit) → boots into STAGE on WebGL2, 0 errors.
+- tools/ui-shots.mjs — desktop + iPhone UI walkthrough with screenshots.

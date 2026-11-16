@@ -58,6 +58,7 @@ export class StagePreset {
   cycleLook(d = 1) { this.looks.set(this.looks.idx + d); _lookIdx = this.looks.idx; return this.looks.current; }
   setLook(i) { this.looks.set(i); _lookIdx = this.looks.idx; return this.looks.current; }
   nextShot() { this.director.next(true); return this.director.shot; }
+  flash() { this._flashUntil = performance.now() + 650; this.director.shake = Math.max(this.director.shake, 0.5); }
 
   tick(device, bands, timeMs, deltaMs, params) {
     const dt = Math.min(deltaMs, 50) / 1000;
@@ -99,7 +100,7 @@ export class StagePreset {
     const sinceDrop = this._t - this._dropAt;
     const beatT = params.beatT ?? 0;
     // strobe: 16th-note gate for ~2 bars after a drop (or the user's flash key)
-    const strobeOn = (sinceDrop < 4 && sinceDrop > 0) || (params.stageStrobe ?? 0) > performance.now();
+    const strobeOn = (sinceDrop < 4 && sinceDrop > 0) || (this._flashUntil ?? 0) > performance.now();
     const strobe = strobeOn ? (((beatT * 4) % 1) < 0.35 ? 1 : 0) : 0;
 
     // MIDI notes → screen flash travelling across the screens by pitch
