@@ -29,3 +29,14 @@ Worktree: ~/Documents/Bloom/Code-3d · shots: ~/Documents/Bloom/shots-3d/
 - ✅ Mobile (iPhone 15, Playwright WebKit, taps): no horizontal overflow, ☰ bottom sheet, 2-col palette; STAGE renders.
 - ✅ No-WebGPU fallback verified (navigator.gpu removed in WebKit) → boots into STAGE on WebGL2, 0 errors.
 - tools/ui-shots.mjs — desktop + iPhone UI walkthrough with screenshots.
+- ✅ Governor v2: share of slow (>20 ms) frames per 2 s window — lone hitches ignored. Verified: with 25 ms/frame
+  CPU load STAGE drops q3→q0 in ~6 s and main.js lowers canvas dpr; normal run stays q3 at 60 fps.
+- ✅ Regression: all 28 modes cycled with demo audio — 0 console errors, 0 render errors. Vite build OK
+  (STAGE is its own lazy chunk: 856 kB / 234 kB gzip).
+- ✅ tools/record-looks.mjs → 12 s webm per look (breakdown → build → drop) in ../shots-3d/video/.
+
+## Next ideas
+- ASCII: per-look glyph sets (katakana / box-drawing), mono phosphor variant, MIDI notes typing words on screens.
+- Screens showing the live 2D worlds as textures (render a 2D preset into a texture → hanging screens).
+- More halls (rooftop, flooded tunnel), selected by genre; laser fans on drops; crowd density from energy.
+- Tune analyser drop rules on real techno sets (synthetic track only needed the pads moved out of the bass band).

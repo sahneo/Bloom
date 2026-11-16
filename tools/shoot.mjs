@@ -26,6 +26,10 @@ await page.setInputFiles('#file-input', track);
 await page.waitForTimeout(500);
 await page.evaluate(() => window.__setMode('stage'));
 await page.waitForTimeout(2500);
+// clean frames: close the welcome card and hide the HUD (performance mode)
+await page.evaluate(() => window.__hud?.closeWelcome());
+await page.keyboard.press('h');
+await page.waitForTimeout(1800);
 
 const fps = (ms = 3000) => page.evaluate((ms) => new Promise(r => {
   let n = 0; const t0 = performance.now();

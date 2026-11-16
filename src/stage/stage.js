@@ -71,12 +71,26 @@ export class StagePreset {
     const realMs = this._lastNow ? Math.min(now - this._lastNow, 100) : 16.7;
     this._lastNow = now;
     this._frameEma = this._frameEma * 0.94 + realMs * 0.06;
-    // Under vsync frame time never drops below the refresh period, so "fast"
-    // means: no missed frames for a while. Each fall-back doubles the wait
-    // before the next upgrade attempt, so it can't oscillate.
-    this._qT += dt;
-    if (this._t > 3 && this._qT > 2 && this._frameEma > 20 && this.quality > 0) { this._upWait = Math.min((this._upWait ?? 10) * 2, 120); this._setQuality(this.quality - 1); }
-    else if (this._qT > (this._upWait ?? 10) && this._frameEma < 17.6 && this.quality < 3) this._setQuality(this.quality + 1);
+    // Governor works on the SHARE of slow frames per 2 s window, so lone
+    // hitches (GC, tab switch, a seek, a screenshot) never cost quality —
+    // only sustained missed frames do. Under vsync "fast" can't mean <16.7 ms,
+    // so upgrades wait for clean windows; each fall-back doubles that wait.
+    this._win = this._win ?? { n: 0, slow: 0, t: 0, good: 0 };
+    const W = this._win;
+    W.n++; if (realMs > 20) W.slow++;
+    W.t += realMs / 1000;
+    if (W.t >= 2) {
+      const share = W.slow / W.n;
+      if (this._t > 3 && share > 0.25 && this.quality > 0) {
+        this._upWait = Math.min((this._upWait ?? 8) * 2, 120);
+        W.good = 0;
+        this._setQuality(this.quality - 1);
+      } else if (share < 0.05) {
+        W.good += W.t;
+        if (W.good >= (this._upWait ?? 8) && this.quality < 3) { W.good = 0; this._setQuality(this.quality + 1); }
+      } else W.good = 0;
+      W.n = 0; W.slow = 0; W.t = 0;
+    }
 
     // ── audio → uniforms ──
     const kick = bands.kick ?? 0;
