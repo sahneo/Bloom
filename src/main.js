@@ -38,6 +38,7 @@ import { WledSync }           from './wled.js';
 import { WledKeys }           from './wledkeys.js';
 import { GestureControl }     from './gesture.js';
 import posthogLib from 'posthog-js';
+import { installDigitakt, digitaktActive } from './digitakt/index.js';
 
 // Analytics key comes from the environment (.env.local / Vercel env) — never
 // hardcode it: the client bundle is public. Without a key, analytics no-op.
@@ -1552,6 +1553,7 @@ async function init() {
   }
 
   function frame(ts) {
+    if (digitaktActive()) { lastFrameTs = ts; requestAnimationFrame(frame); return; }   // Digitakt overlay owns the screen
     const dtS = Math.min(ts - (lastFrameTs || ts), 50) / 1000;
     adaptDpr(ts, dtS * 1000);
     lastFrameTs = ts;
@@ -1748,4 +1750,5 @@ async function init() {
   }
 }
 
+installDigitakt();
 init();
