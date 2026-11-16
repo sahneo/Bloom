@@ -6,6 +6,7 @@ export class Renderer {
     this.format   = null;
     this.preset   = null;
     this._lastTs  = null;
+    this.webgpu   = false;   // false → only self-presenting presets (STAGE on WebGL2) can run
   }
 
   async init() {
@@ -22,7 +23,11 @@ export class Renderer {
     });
     this.context = this.canvas.getContext('webgpu');
     this.format  = navigator.gpu.getPreferredCanvasFormat();
+    this._configure();
+    this.webgpu = true;
+  }
 
+  _configure() {
     this.context.configure({
       device:    this.device,
       format:    this.format,
@@ -31,10 +36,16 @@ export class Renderer {
   }
 
   async loadPreset(PresetClass) {
+    const wasSelf = this.preset?.selfPresent;
     if (this.preset?.destroy) this.preset.destroy();
-    this.preset  = new PresetClass();
+    this.preset  = null;
+    // a self-presenting preset (Three.js STAGE) reconfigured the shared
+    // canvas context — hand it back to the raw-WebGPU presets
+    if (wasSelf && this.webgpu && !PresetClass.prototype.selfPresent) this._configure();
+    const preset = new PresetClass();
     this._lastTs = null;
-    await this.preset.init(this.device, this.format, this.canvas);
+    await preset.init(this.device, this.format, this.canvas);
+    this.preset = preset;
   }
 
   render(timeMs, bands, params) {
@@ -42,6 +53,7 @@ export class Renderer {
     this._lastTs = timeMs;
     if (!this.preset) return;
     this.preset.tick(this.device, bands, timeMs, delta, params);
+    if (this.preset.selfPresent) { this.preset.draw(); return; }
     this.preset.draw(this.device, this.context.getCurrentTexture().createView());
   }
 }

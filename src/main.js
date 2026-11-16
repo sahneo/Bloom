@@ -566,6 +566,10 @@ const midi     = new MIDIHandler({
     wledKeys.noteOn(pitch, velocity, channel);
     if (channel === 9) return;   // drum pads light the strip but must not pollute harmony
     harmony.noteOn(pitch, velocity);
+    if (currentMode === 'stage') {   // STAGE drains this queue each frame (screens flash by pitch)
+      (params.noteQueue ??= []).push({ pitch, vel: velocity / 127 });
+      if (params.noteQueue.length > 32) params.noteQueue.shift();
+    }
     ripples.spawn(pitch);
     lastMidiMs = performance.now();
     // universal impulse: every mode answers a played note, no mapping needed
@@ -844,7 +848,7 @@ btnProj.addEventListener('click', () => {
 });
 
 // Debug/test handle — lets automated tests read live analysis state
-window.__bloom = { beat, harmony, audio, params, structure, autovj, drift, midiCC: handleMidiCC, wledKeys, wled };
+window.__bloom = { beat, harmony, audio, params, structure, autovj, drift, midiCC: handleMidiCC, wledKeys, wled, renderer };
 
 // ── Preset / mode ────────────────────────────────────────────────────
 let currentMode = 'particles';  // 'particles' | 'oscilloscope' | 'ascii' | 'silk' | 'flora'
@@ -856,14 +860,30 @@ function onConnected(label) {
   setTimeout(() => uiEl.classList.add('faded'), 1800);
 }
 
+// STAGE (3D, Three.js) is loaded on demand — the 2D start-up never pays for it
+let _stageMod = null;
+async function loadStage() {
+  _stageMod ??= await import('./stage/stage.js');
+  return _stageMod.StagePreset;
+}
+
 async function init() {
   try {
     await renderer.init();
     await renderer.loadPreset(ParticlesPreset);
   } catch (e) {
-    errorEl.style.display = 'block';
-    errorEl.textContent   = e.message;
-    return;
+    // No WebGPU (older Safari/WebKit, some Linux): the 2D worlds can't run,
+    // but STAGE renders through Three.js's WebGL2 backend — boot into it.
+    console.warn('WebGPU unavailable, falling back to STAGE on WebGL2:', e.message);
+    try {
+      await renderer.loadPreset(await loadStage());
+      currentMode = 'stage';
+      document.body.classList.add('no-webgpu');
+    } catch (e2) {
+      errorEl.style.display = 'block';
+      errorEl.textContent   = e.message + ' · ' + e2.message;
+      return;
+    }
   }
 
   // Mode switch: particles ↔ oscilloscope ↔ ascii ↔ silk ↔ flora
@@ -895,7 +915,9 @@ async function init() {
     bz:           BzPreset,
     pendulum:     PendulumPreset,
     frost:        FrostPreset,
+    stage:        'lazy',        // resolved by resolveMode() → StagePreset
   };
+  const resolveMode = async (mode) => MODES[mode] === 'lazy' ? loadStage() : MODES[mode];
   const modeSelect = document.getElementById('mode-select');
 
   // Mode-specific controls appear only in their mode
@@ -910,11 +932,13 @@ async function init() {
     document.getElementById('kino-panel').classList.toggle('hidden', mode !== 'kino');
     document.getElementById('type-panel').classList.toggle('hidden', mode !== 'type');
   }
-  updateModeControls('particles');
+  updateModeControls(currentMode);
+  modeSelect.value = currentMode;
 
   async function setMode(mode) {
+    if (!renderer.webgpu && mode !== 'stage') return;   // WebGL2 fallback: STAGE only
     currentMode = mode;
-    await renderer.loadPreset(MODES[mode]);
+    await renderer.loadPreset(await resolveMode(mode));
     modeSelect.value = mode;
     updateModeControls(mode);
     posthog.capture('mode_changed', { mode });
@@ -1166,11 +1190,11 @@ async function init() {
   // (drops sometimes, every 16 phrases otherwise). Backs off for 45 s after
   // a manual pick so the user always wins.
   // city/galaxy join the pool once their presets land (stubs render black)
-  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism', 'type', 'physarum', 'aurora', 'fireflies', 'abyss', 'frost', 'bz', 'pendulum'];   // fx needs media — manual only
+  const VJ_PRESET_POOL = ['stage', 'particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism', 'type', 'physarum', 'aurora', 'fireflies', 'abyss', 'frost', 'bz', 'pendulum'];   // fx needs media — manual only
   // Dramaturgy: quiet passages get contemplative worlds, peaks get raw
   // energy; build-ups never switch (the tension must resolve where it grew)
   const VJ_CALM = ['abyss', 'fireflies', 'glass', 'silk', 'flora', 'physarum', 'aurora', 'frost', 'fluid', 'bz', 'pendulum'];
-  const VJ_PEAK = ['swarm', 'void', 'storm', 'particles', 'cymatics', 'terra', 'acid', 'prism', 'galaxy'];
+  const VJ_PEAK = ['stage', 'swarm', 'void', 'storm', 'particles', 'cymatics', 'terra', 'acid', 'prism', 'galaxy'];
   let _phrasesSincePreset = 0;
   const _recentModes = [];
 
@@ -1185,7 +1209,7 @@ async function init() {
   }
 
   function autoRotate(st) {
-    if (!autovj.enabled || _switching) return;
+    if (!autovj.enabled || _switching || !renderer.webgpu) return;
     if (performance.now() - lastManualModeMs < 45000) return;
     if (st.state === 'build') return;                       // hold through the build
     const pool = (st.state === 'quiet' || st.state === 'breakdown') ? VJ_CALM
@@ -1594,6 +1618,9 @@ async function init() {
     drift.update(dtS, fftEnergy);
     params.tension    = st.tension;
     params.dropPulse  = st.dropPulse;
+    params.structState = st.state;          // STAGE camera director reads these
+    params.phrase      = st.phrase;
+    if (st.onDrop) params.dropCount = (params.dropCount ?? 0) + 1;
     params.driftScale = drift.scale;
     params.driftRot   = drift.rot;
     // Composition centre = slow generative wander + the scene's committed offset
