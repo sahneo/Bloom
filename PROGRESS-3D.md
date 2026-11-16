@@ -40,3 +40,4 @@ Worktree: ~/Documents/Bloom/Code-3d · shots: ~/Documents/Bloom/shots-3d/
 - Screens showing the live 2D worlds as textures (render a 2D preset into a texture → hanging screens).
 - More halls (rooftop, flooded tunnel), selected by genre; laser fans on drops; crowd density from energy.
 - Tune analyser drop rules on real techno sets (synthetic track only needed the pads moved out of the bass band).
+- ✅ PR #2 https://github.com/sahneo/Bloom/pull/2 · preview https://bloom-git-feature-3d-stage-sakhph-5193s-projects.vercel.app (behind Vercel login)
