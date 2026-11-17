@@ -1564,7 +1564,7 @@ async function init() {
     // Precise worklet onsets AFTER update so beatT and the events' "ago"
     // reference the same instant (draining first read a frame-stale beatT
     // and settled the whole grid one frame early)
-    for (const ev of audio.drainOnsetEvents()) beat.onsetEvent(ev.ago, ev.kick, ev.snare);
+    for (const ev of audio.drainOnsetEvents()) beat.onsetEvent(ev.ago, ev.kick, ev.snare, ev.hat ?? 0);
     // SYNC: shift the beat grid forward so beat-locked visuals anticipate the
     // audio path's capture latency (system audio arrives 50-150 ms late)
     const syncBeats = (params.syncMs ?? 0) / 1000 / Math.max(beat.period, 0.2);

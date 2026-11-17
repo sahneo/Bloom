@@ -272,8 +272,26 @@ export class AudioAnalyser {
       this._onsetEvents = [];
       this._evPrevK = 0; this._evPrevS = 0;
       this._evLastK = -1; this._evLastS = -1;
+      this._liveHat = 0;
       this._onsetNode.port.onmessage = (e) => {
-        const { k, s, t } = e.data;
+        const d = e.data;
+        if (d.v === 2) {
+          // v2 worklet: kick/snare/hat already classified on the audio thread
+          // (spectral-shape gated, level-invariant) — strengths arrive 0..1.
+          // Peak-hold across the ~6 blocks between frames so a 3 ms hit that
+          // lands mid-frame still reaches the visuals.
+          this._liveKick  = Math.max(this._liveKick,  d.k);
+          this._liveSnare = Math.max(this._liveSnare, d.s);
+          this._liveHat   = Math.max(this._liveHat,   d.h);
+          this._liveAt    = d.t;
+          if (d.ev) for (const ev of d.ev) {
+            this._onsetEvents.push({ t: ev.t, kick: ev.type === 'k' ? ev.mag : 0,
+              snare: ev.type === 's' ? ev.mag : 0, hat: ev.type === 'h' ? ev.mag : 0 });
+            if (this._onsetEvents.length > 64) this._onsetEvents.shift();
+          }
+          return;
+        }
+        const { k, s, t } = d;
         this._liveKickMax  = Math.max(this._liveKickMax  * 0.9995, k + 1e-5);
         this._liveSnareMax = Math.max(this._liveSnareMax * 0.9995, s + 1e-5);
         this._liveKickBase  = this._liveKickBase  * 0.98 + (k / this._liveKickMax)  * 0.02;
@@ -388,6 +406,8 @@ export class AudioAnalyser {
     const kickTransient  = Math.max(0, kickScore    - this._kickBaseline)  * 10;
     const snareTransient = Math.max(0, snareRawNorm - this._snareBaseline) * 9;
 
+    this._kickPrev  = this._kick  ?? 0;
+    this._snarePrev = this._snare ?? 0;
     this._kick  = Math.max(Math.min(kickTransient,  1), this._kick  * 0.72);
     this._snare = Math.max(Math.min(snareTransient, 1), this._snare * 0.68);
 
@@ -395,10 +415,28 @@ export class AudioAnalyser {
     // ~1-2 frames, so drum-driven visuals and beat phase land on the hit.
     // Blend rather than replace — the FFT path carries the harmonic-gated
     // kick score that rejects bass notes, which the raw band filter can't.
-    if (this.hasLiveOnset) {
+    // v2 worklet (classified hits) REPLACES the FFT envelopes: the FFT
+    // snare band is where hats live and the FFT kick band is where bass
+    // notes live — bench: FFT-path snare precision 31 %, kick 70 %.
+    const live2 = this.hasLiveOnset && this._liveAt !== undefined
+               && this.context.currentTime - this._liveAt < 0.5;
+    if (live2) {
+      this._kick  = Math.max(this._liveKick,  this._kickPrev  * 0.72);
+      this._snare = Math.max(this._liveSnare, this._snarePrev * 0.68);
+      this._hat   = Math.max(this._liveHat,   (this._hat ?? 0) * 0.6);
+      this._liveKick = this._liveSnare = this._liveHat = 0;
+    } else if (this.hasLiveOnset) {
       this._kick  = Math.max(this._kick,  this._liveKick  * (0.5 + kickScore * 0.5));
       this._snare = Math.max(this._snare, this._liveSnare * 0.9);
     }
+    if (!live2) {
+      // FFT fallback hat: positive change of the top band
+      const hRaw = raw.high;
+      const dh = Math.max(0, hRaw / Math.max(this._agc.high.max, 0.03) - (this._hatPrevRaw ?? 0));
+      this._hatPrevRaw = hRaw / Math.max(this._agc.high.max, 0.03);
+      this._hat = Math.max(Math.min(dh * 4, 1), (this._hat ?? 0) * 0.6);
+    }
+    this._kickPrev = this._kick; this._snarePrev = this._snare;
 
     const kickGate  = 1.0 - this._kick  * 0.85;
     const snareGate = 1.0 - this._snare * 0.70;
@@ -507,6 +545,7 @@ export class AudioAnalyser {
       high:    this._smoothed.high,
       kick:    this._kick,
       snare:   this._snare,
+      hat:     this._hat ?? 0,
       flux:    this.flux ?? 0,
     };
     return this.bands;

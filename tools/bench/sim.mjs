@@ -164,7 +164,7 @@ export async function runTrack(pipeline, samples, onFrame, { fps = 60 } = {}) {
       const dtS = 1 / fps;
       const raw = audio.update();
       beat.update(t, raw.kick, raw.snare, raw.high, dtS, raw.flux ?? 0);
-      for (const ev of audio.drainOnsetEvents()) beat.onsetEvent(ev.ago, ev.kick, ev.snare);
+      for (const ev of audio.drainOnsetEvents()) beat.onsetEvent(ev.ago, ev.kick, ev.snare, ev.hat ?? 0);
       const fftEnergy = (raw.bass + raw.mid + raw.high) / 3;
       const harm = harmony.updateFromChroma(audio.chromagram, fftEnergy);
       const st = structure.update(raw, beat, dtS);

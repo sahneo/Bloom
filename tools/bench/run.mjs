@@ -65,7 +65,7 @@ async function scoreTrack(name) {
   const { samples, truth } = renderTrack(name);
   const eK = new Edge(0.5, 0.08), eS = new Edge(0.5, 0.08), eH = new Edge(0.5, 0.05), eHd = new Edge(0.08, 0.05);
   let prevHigh = 0;
-  const bpmErr = [], bpmOk = [], phaseOk = [];
+  const bpmErr = [], bpmOk = [], bpmOk2 = [], phaseOk = [];
   const bass = { n: 0, pc: 0, exact: 0, voiced: 0, falseOn: 0, silentN: 0 };
   const mel = { n: 0, pc: 0, exact: 0 };
   const key = { n: 0, root: 0, mode: 0 };
@@ -86,13 +86,18 @@ async function scoreTrack(name) {
     if (sinceChange > 8) {
       const e = Math.abs(beat.bpm - tb) / tb;
       bpmErr.push(e * 100); bpmOk.push(e < 0.03 ? 1 : 0);
+      // MIREX "accuracy 2": half/double tempo also counts (DnB at 86 etc.)
+      bpmOk2.push([1, 2, 0.5, 3, 1 / 3].some(k => Math.abs(beat.bpm - tb * k) / (tb * k) < 0.03) ? 1 : 0);
     }
     // beat phase at each true beat instant
     while (beatIdx < truth.beats.length && truth.beats[beatIdx].t <= t) {
-      const bt = truth.beats[beatIdx++];
+      const bt = truth.beats[beatIdx++]; bt.bpm = tempoAt(bt.t).bpm;
       if (bt.t - Math.max(...tempoChanges.filter(c => c <= bt.t)) <= 8) continue;
       const ago = t - bt.t;
-      const ph = beat.beatT - ago / beat.period;
+      // scored at the TRACKER's metrical level: a half-tempo grid must hit
+      // every other true beat, i.e. true beats sit on whole or half beats
+      const lvl = [0.5, 1, 2].reduce((a, k) => Math.abs(beat.bpm - bt.bpm * k) < Math.abs(beat.bpm - bt.bpm * a) ? k : a, 1);
+      const ph = (beat.beatT - ago / beat.period) / lvl;
       const err = Math.abs(ph - Math.round(ph));
       phaseOk.push(beat.conf > 0.3 && err < 0.1 ? 1 : 0);
     }
@@ -149,6 +154,7 @@ async function scoreTrack(name) {
     name,
     kick: onsetF1(eK.out, truth.kick), snare: onsetF1(eS.out, truth.snare), hat: onsetF1(hatDet, truth.hat),
     bpmAcc: bpmOk.reduce((a, b) => a + b, 0) / Math.max(1, bpmOk.length),
+    bpmAcc2: bpmOk2.reduce((a, b) => a + b, 0) / Math.max(1, bpmOk2.length),
     bpmErr: median(bpmErr),
     phaseAcc: phaseOk.reduce((a, b) => a + b, 0) / Math.max(1, phaseOk.length),
     bassPc: bass.pc / Math.max(1, bass.n), bassExact: bass.exact / Math.max(1, bass.n),
@@ -170,12 +176,12 @@ for (const n of names) results.push(await scoreTrack(n));
 const pct = (v) => isNaN(v) ? '  —  ' : (v * 100).toFixed(0).padStart(4) + '%';
 const ms = (v) => isNaN(v) ? '  — ' : ((v * 1000).toFixed(0) + 'ms').padStart(6);
 console.log(`\nBloom analysis bench — ${ref ? 'ref ' + ref : 'working tree'}\n`);
-console.log('track            kickF1 lat   snrF1 lat   hatF1  bpm±3% phase  bassPC bassOct bassFP melPC melOct keyRt keyMd drops   bdown');
+console.log('track            kickF1 lat   snrF1 lat   hatF1  bpm±3% ×2ok phase  bassPC bassOct bassFP melPC melOct keyRt keyMd drops   bdown');
 for (const r of results) {
   console.log(
     r.name.padEnd(16),
     pct(r.kick.f1), ms(r.kick.lat), pct(r.snare.f1), ms(r.snare.lat), pct(r.hat.f1),
-    ' ', pct(r.bpmAcc), pct(r.phaseAcc), ' ', pct(r.bassPc), ' ', pct(r.bassExact), pct(r.bassFalse),
+    ' ', pct(r.bpmAcc), pct(r.bpmAcc2), pct(r.phaseAcc), ' ', pct(r.bassPc), ' ', pct(r.bassExact), pct(r.bassFalse),
     pct(r.melPc), pct(r.melExact), pct(r.keyRoot), pct(r.keyMode),
     ` ${r.drops.hit}/${r.drops.truth}(${r.drops.fired})`.padEnd(8), pct(r.breakdownAcc),
   );
@@ -183,7 +189,7 @@ for (const r of results) {
 const mean = (f) => results.reduce((a, r) => a + f(r), 0) / results.length;
 const summary = {
   kickF1: mean(r => r.kick.f1), snareF1: mean(r => r.snare.f1), hatF1: mean(r => r.hat.f1),
-  bpmAcc: mean(r => r.bpmAcc), phaseAcc: mean(r => r.phaseAcc),
+  bpmAcc: mean(r => r.bpmAcc), bpmAcc2: mean(r => r.bpmAcc2), phaseAcc: mean(r => r.phaseAcc),
   bassPc: mean(r => r.bassPc), bassExact: mean(r => r.bassExact), bassFalse: mean(r => r.bassFalse),
   melPc: mean(r => r.melPc), melExact: mean(r => r.melExact),
   keyRoot: mean(r => r.keyRoot), keyMode: mean(r => r.keyMode),
@@ -193,7 +199,7 @@ const summary = {
 };
 console.log(
   'MEAN'.padEnd(16), pct(summary.kickF1), '      ', pct(summary.snareF1), '      ', pct(summary.hatF1), ' ',
-  pct(summary.bpmAcc), pct(summary.phaseAcc), ' ', pct(summary.bassPc), ' ', pct(summary.bassExact), pct(summary.bassFalse),
+  pct(summary.bpmAcc), pct(summary.bpmAcc2), pct(summary.phaseAcc), ' ', pct(summary.bassPc), ' ', pct(summary.bassExact), pct(summary.bassFalse),
   pct(summary.melPc), pct(summary.melExact), pct(summary.keyRoot), pct(summary.keyMode),
   ` ${summary.dropsHit}/${summary.dropsTruth}(${summary.dropsFired})`.padEnd(8), pct(summary.breakdownAcc));
 console.log(`\ncost: main thread ${summary.mainMsPerFrame.toFixed(3)} ms/frame (node), worklet ${summary.workletMsPerSec.toFixed(1)} ms per audio-second`);
