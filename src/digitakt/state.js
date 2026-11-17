@@ -283,8 +283,12 @@ export class DTState {
         if (dt > 2 && dt < 200) {
           this.clockIntervals.push(dt);
           if (this.clockIntervals.length > 48) this.clockIntervals.shift();
-          const avg = this.clockIntervals.reduce((a, b) => a + b, 0) / this.clockIntervals.length;
-          this.bpm = 60000 / (avg * 24);
+          // median, not mean: USB delivers clock in bursts (worse while a SysEx
+          // dump is on the wire), and one late tick shouldn't swing the tempo
+          const srt = [...this.clockIntervals].sort((a, b) => a - b);
+          const med = srt[srt.length >> 1];
+          const ok = srt.filter(x => Math.abs(x - med) < med * 0.5);
+          this.bpm = 60000 / ((ok.reduce((a, b) => a + b, 0) / ok.length) * 24);
         }
       }
       this.lastClockT = t;

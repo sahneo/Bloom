@@ -69,7 +69,8 @@ export function parsePatternDump(bytes) {
   const p = decode7(enc);
   if (p.length !== SIZE_PATTERN && p.length !== SIZE_PATTERN_KIT) return { error: `size ${p.length}` };
   const v = new DataView(p.buffer, p.byteOffset, p.byteLength);
-  if (v.getUint32(0) !== 9) return { error: `struct v${v.getUint32(0)}` };
+  const ver = v.getUint32(0);
+  if (ver !== 9 && ver !== 10) return { error: `struct v${ver}` };   // 9 = OS 1.52, 10 = OS 1.53 (same layout)
   const tracks = [];
   for (let t = 0; t < TRACKS; t++) {
     const base = TRACKS_AT + t * TRACK_SIZE;
