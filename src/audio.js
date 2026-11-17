@@ -1,3 +1,5 @@
+import { PitchTracker } from './pitch.js';
+
 // Universal band ranges (Hz) — genre presets narrow these for better separation
 const DEFAULT_RANGES = {
   subBass: [20, 80],   bass: [80, 250],      mid: [250, 2000], high: [2000, 16000],
@@ -504,6 +506,9 @@ export class AudioAnalyser {
       this.chromaAnalyser.getByteFrequencyData(this.chromaData);
       const chromaBinHz = this.context.sampleRate / this.chromaAnalyser.fftSize;
       this.chromagram = this._computeChromagram(chromaBinHz, this.chromaData);
+      // Bass / melody notes (+ cleaner chroma) from the same 8192 analyser
+      if (!this.pitch) this.pitch = new PitchTracker(this.context.sampleRate, this.chromaAnalyser.fftSize);
+      this.pitch.update(this.chromaAnalyser, this._kick);
     } else {
       this.chromagram = this._computeChromagram(binHz, this.dataArray);
     }
@@ -547,6 +552,12 @@ export class AudioAnalyser {
       snare:   this._snare,
       hat:     this._hat ?? 0,
       flux:    this.flux ?? 0,
+      // Notes as MIDI numbers (-1 = none) + 0..1 confidence. Additive fields:
+      // existing presets ignore them; harmony/visuals can opt in.
+      bassNote: this.pitch ? this.pitch.bassNote : -1,
+      bassConf: this.pitch ? this.pitch.bassConf : 0,
+      melNote:  this.pitch ? this.pitch.melNote  : -1,
+      melConf:  this.pitch ? this.pitch.melConf  : 0,
     };
     return this.bands;
   }
