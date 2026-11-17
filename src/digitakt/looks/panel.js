@@ -171,14 +171,16 @@ export class PanelLook {
   _trig(ctx, iso, it, st, z, now, dpr) {
     const i = trigIndex(it.id);
     const tr = st.tracks[i];
-    const rgb = TRACK_RGB[i];
-    const visible = i < st.trackCount;
-    const flash = visible ? tr.flash * (1 - tr.mute * 0.85) : 0;
-    const step = st.step(now);
-    const isStep = step === i;
-    // learned trig LED for the most recently played track (what the grid would show)
-    const focus = st.hits.length ? st.hits[st.hits.length - 1].track : 0;
-    const led = st.tracks[focus].steps[i];
+    // Step view (pattern read over SysEx): like the box in GRID mode, key n is
+    // step n of the viewed track's current page — lit where a trig sits, a
+    // white playhead runs over them, and each trig flashes as it plays.
+    const seqView = !!st.seq;
+    const focus = st.viewTrack();
+    const rgb = seqView ? TRACK_RGB[st.stepTrack[i]] : TRACK_RGB[i];
+    const visible = seqView || i < st.trackCount;
+    const flash = seqView ? st.stepFlash[i] : (visible ? tr.flash * (1 - tr.mute * 0.85) : 0);
+    const isStep = seqView ? st.playKey(now) === i : st.step(now) === i;
+    const led = seqView ? st.trigOnKey(i, now) * (st.tracks[focus].muted ? 0.4 : 1) * 2.6 : st.tracks[focus].steps[i];
     const press = flash * 4;
     const zt = z + TRIG_H - press;
     const pts = roundRectPts(it.cx - it.w / 2, it.cy - it.h / 2, it.w, it.h, 5, 2);
@@ -187,13 +189,13 @@ export class PanelLook {
     prism(ctx, iso, pts, z, zt, {
       fill: fillA > 0.01 ? rgba(fillRGB.map(c => c * fillA * 0.55), 1) : '#0b0c0e',
       side: '#060708',
-      stroke: flash > 0.05 ? rgba(rgb, 0.5 + 0.5 * flash) : rgba(LINE, tr.muted ? 0.22 : (isStep ? 0.95 : 0.6)),
+      stroke: flash > 0.05 ? rgba(rgb, 0.5 + 0.5 * flash) : (seqView && led > 0 && !isStep) ? rgba(TRACK_RGB[focus], 0.8) : rgba(LINE, !seqView && tr.muted ? 0.22 : (isStep ? 0.95 : 0.6)),
       lw: isStep ? 1.6 : 1, dpr,
     });
     // inner LED window
     const inset = roundRectPts(it.cx - it.w / 2 + 8, it.cy - it.h / 2 + 8, it.w - 16, it.h - 16, 3, 2);
     ctx.lineWidth = 1 * dpr;
-    if (tr.muted && visible) {
+    if (!seqView && tr.muted && visible) {
       ctx.setLineDash([3 * dpr, 3 * dpr]);
       ctx.strokeStyle = rgba(LINE, 0.35);
       polyPath(ctx, iso, inset, zt, dpr); ctx.stroke();
@@ -208,7 +210,7 @@ export class PanelLook {
       polyPath(ctx, iso, roundRectPts(it.cx - it.w / 2 - 6, it.cy - it.h / 2 - 6, it.w + 12, it.h + 12, 8, 2), zt, dpr); ctx.fill();
       ctx.globalCompositeOperation = 'source-over';
     }
-    this._label(ctx, iso, it.label, it.cx, it.cy, zt, dpr, flash > 0.3 ? 'rgba(255,255,255,0.95)' : rgba(LINE, tr.muted ? 0.25 : 0.6), 11);
+    this._label(ctx, iso, it.label, it.cx, it.cy, zt, dpr, flash > 0.3 ? 'rgba(255,255,255,0.95)' : rgba(LINE, !seqView && tr.muted ? 0.25 : 0.6), 11);
   }
 
   // Rising outline echoes from each track's key — the "sound leaving the box"
@@ -220,7 +222,8 @@ export class PanelLook {
       const age = (now - h.t) / 900;
       if (age > 1) break;
       if (age < 0 || h.track >= st.trackCount) continue;
-      const c = this.items.find(it => it.id === `key.trig_${h.track + 1}`);
+      const key = st.seq && h.step >= 0 ? (h.step % 16) : h.track;
+      const c = this.items.find(it => it.id === `key.trig_${key + 1}`);
       const grow = 1 + age * 0.6;
       const w = c.w * grow, hh = c.h * grow;
       ctx.strokeStyle = rgba(TRACK_RGB[h.track], (1 - age) * (0.3 + 0.7 * h.vel));
@@ -282,9 +285,10 @@ export class PanelLook {
   }
 
   _pageLeds(ctx, iso, it, st, z, now, dpr) {
-    const pos = st.stepPos(now);
-    const page = pos >= 0 ? Math.floor(pos / 16) % 4 : -1;
+    const page = st.viewPage(now);
+    const pages = st.seq ? Math.ceil(st.seq.tracks[st.viewTrack()].len / 16) : 4;
     for (let i = 0; i < 4; i++) {
+      if (i >= pages) continue;
       const cx = it.cx - it.w / 2 + (i + 0.5) * (it.w / 4);
       ctx.lineWidth = 1 * dpr;
       ctx.strokeStyle = rgba(LINE, 0.5);

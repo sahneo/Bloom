@@ -93,6 +93,15 @@ export class DTState {
     this.pattern = 0;            // 0..127 → A01..H16
     this.patternFlash = 0;
 
+    // Pattern read from the box over SysEx (see sysex.js). When present the
+    // trigs are played back from MIDI clock — the Digitakt itself never
+    // sends its audio-track sequencer as notes.
+    this.seq = null;             // { slot, tracks:[{trigs,vel,len}], length, at }
+    this.focusTrack = -1;        // track whose trigs the keys show; -1 = auto
+    this.stepFlash = new Float32Array(16);   // per trig-key flash in step view
+    this.stepTrack = new Uint8Array(16);     // which track lit that key last
+    this.seqStep = -1;           // absolute 16th since PLAY (sequencer view)
+
     this.hits = [];              // ring of {id, track, vel, note, t, step, off}
     this.hitSeq = 0;
     this.monitor = [];           // human-readable recent messages
@@ -126,7 +135,7 @@ export class DTState {
     const ch = (status & 0x0f) + 1;
     const d1 = data[1] ?? 0, d2 = data[2] ?? 0;
 
-    if (type === 0x90 && d2 > 0) this._noteOn(d1, d2, ch, t);
+    if (type === 0x90 && d2 > 0) { if ((ch - 1) >= 8 && ch !== this.autoChannel) this.usedMidiNotes = true; this._noteOn(d1, d2, ch, t); }
     else if (type === 0x80 || type === 0x90) this._noteOff(d1, ch);
     else if (type === 0xb0) this._cc(d1, d2, ch, t);
     else if (type === 0xc0) {
@@ -143,21 +152,89 @@ export class DTState {
 
   _noteOn(note, vel, ch, t) {
     const i = this.trackFor(note, ch);
-    const tr = this.tracks[i];
     if (i >= 8) this.usedMidiTracks = true;
-    const v = vel / 127;
+    this._hit(i, vel / 127, note, t, this.step(t));
+    this._log(t, `${this.tracks[i].name.padEnd(7)} note ${note} vel ${vel} · ch ${ch}`);
+  }
+
+  _hit(i, v, note, t, step) {
+    const tr = this.tracks[i];
     tr.flash = Math.max(tr.flash, 0.35 + 0.65 * v);
     tr.vel = v;
     tr.gate++;
     tr.lastHit = t;
     tr.hits++;
-    const step = this.step(t);
-    if (step >= 0) tr.steps[step] = 1;
+    if (step >= 0) {
+      if (!this.seq) tr.steps[step] = 1;
+      const k = step % 16;
+      if (i === this.viewTrack() || !this.seq) { this.stepFlash[k] = Math.max(this.stepFlash[k], 0.35 + 0.65 * v); this.stepTrack[k] = i; }
+    }
     this.energy = Math.min(1, this.energy + 0.08 + 0.1 * v);
     if (i === 0) this.kick = Math.max(this.kick, 0.5 + 0.5 * v);
     this.hits.push({ id: ++this.hitSeq, track: i, vel: v, note, t, step, off: 0 });
     if (this.hits.length > HIT_RING) this.hits.shift();
-    this._log(t, `${tr.name.padEnd(7)} note ${note} vel ${vel} · ch ${ch}`);
+  }
+
+  // ── pattern from SysEx ────────────────────────────────────────────────
+  setPattern(p, t) {
+    const first = !this.seq;
+    this.seq = { ...p, at: t };
+    // MIDI tracks A–H that hold trigs → show the second row of tracks
+    if (p.tracks.slice(8).some(tr => tr.count)) this.usedMidiTracks = true;
+    for (let i = 0; i < 16; i++) {
+      const tr = this.tracks[i], pt = p.tracks[i];
+      for (let s = 0; s < 16; s++) tr.steps[s] = 0;
+      for (let s = 0; s < pt.len; s++) if (pt.trigs[s]) tr.steps[s % 16] = 1;
+    }
+    if (first) this._log(t, `PATTERN ${this.patternName()} read · ${p.tracks.reduce((a, tr) => a + tr.count, 0)} trigs`);
+  }
+
+  /** Track the trig keys show in step view: picked (T), last knob-touched, or first with trigs. */
+  viewTrack() {
+    if (this.focusTrack >= 0) return this.focusTrack;
+    if (this.activeKnown) return this.activeTrack;
+    if (!this.seq) return this.hits.length ? this.hits[this.hits.length - 1].track : 0;
+    for (let i = 0; i < 8; i++) if (this.seq.tracks[i].count) return i;   // first track with trigs
+    return 0;
+  }
+
+  /** Page (0..3) of the viewed track currently under the playhead. */
+  viewPage(now) {
+    const pos = this.stepPos(now);
+    if (!this.seq || pos < 0) return pos < 0 ? -1 : Math.floor(pos / 16) % 4;
+    const len = this.seq.tracks[this.viewTrack()].len;
+    return Math.floor((Math.floor(pos) % len) / 16);
+  }
+
+  /** Is there a trig on key k (0..15) of the viewed track's current page? */
+  trigOnKey(k, now) {
+    if (!this.seq) return this.tracks[this.viewTrack()].steps[k];
+    const pt = this.seq.tracks[this.viewTrack()];
+    const s = Math.max(0, this.viewPage(now)) * 16 + k;
+    return s < pt.len && pt.trigs[s] ? 1 : 0;
+  }
+
+  /** Key (0..15) the playhead is on for the viewed track, or -1. */
+  playKey(now) {
+    const pos = this.stepPos(now);
+    if (pos < 0) return -1;
+    const len = this.seq ? this.seq.tracks[this.viewTrack()].len : 16;
+    return (Math.floor(pos) % len) % 16;
+  }
+
+  _seqFire(abs, t) {
+    const seq = this.seq;
+    if (!seq) return;
+    this.seqStep = abs;
+    for (let i = 0; i < 16; i++) {
+      // MIDI tracks A–H send their own notes on their channel — don't double them
+      if (i >= 8 && this.usedMidiNotes) continue;
+      const pt = seq.tracks[i];
+      if (!pt.count) continue;
+      const s = abs % pt.len;
+      if (!pt.trigs[s] || this.tracks[i].muted) continue;
+      this._hit(i, pt.vel[s], -1, t, s);
+    }
   }
 
   _noteOff(note, ch) {
@@ -186,7 +263,7 @@ export class DTState {
     }
     // knobs always act on the active track, so a CC on a track channel
     // tells us which one that is (TRK + TRIG itself sends nothing)
-    if (ch !== this.autoChannel) this.activeTrack = i;
+    if (ch !== this.autoChannel) { this.activeTrack = i; this.activeKnown = true; }
     const k = CC_KNOB[cc];
     if (k) {
       const knob = this.knobs[k[0]];
@@ -213,9 +290,11 @@ export class DTState {
       this.lastClockT = t;
       this.hasClock = true;
       if (this.playing) {
+        // first clock after START is step 1 → fire steps on clocks 0, 6, 12…
+        if (this.clocks % 6 === 0) this._seqFire(this.clocks / 6, t);
         this.clocks++;
-        // new bar → let the learned trig masks forget slowly
-        if (this.clocks % 96 === 0) for (const tr of this.tracks) for (let s = 0; s < 16; s++) tr.steps[s] *= 0.55;
+        // new bar → let the learned trig masks forget slowly (no pattern read)
+        if (!this.seq && this.clocks % 96 === 0) for (const tr of this.tracks) for (let s = 0; s < 16; s++) tr.steps[s] *= 0.55;
       }
     } else if (status === 0xfa) {
       this.playing = true; this.clocks = 0; this.transportFlash = 1;
@@ -249,6 +328,7 @@ export class DTState {
     }
     this.levelKnob.shown += (this.levelKnob.value - this.levelKnob.shown) * (1 - f(45));
     this.levelKnob.touch *= f(900);
+    for (let k = 0; k < 16; k++) this.stepFlash[k] *= f(180);
     this.transportFlash *= f(500);
     this.stopFlash *= f(500);
     this.patternFlash *= f(700);

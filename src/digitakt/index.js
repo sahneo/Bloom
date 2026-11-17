@@ -7,11 +7,18 @@
 //   L / → / ←  next / previous look      1–4  pick a look
 //   X          demo on/off                I    MIDI monitor
 //   F          fullscreen                 Esc  leave the mode
+//   T          which track the trig keys show (auto → 1…8 → auto)
+//
+// The Digitakt doesn't send its audio sequencer as MIDI notes, so the mode
+// reads the pattern over SysEx (needs the MIDI+SysEx permission) and plays
+// the trigs back from MIDI clock. Re-read on PLAY, pattern change and every
+// ~1.5 s, so trigs placed in GRID mode show up without saving.
 // Tap (phone): next look. URL: ?digitakt[=look][&dtauto=10]
 // ---------------------------------------------------------------------------
 
 import { DTState } from './state.js';
 import { DemoSequencer } from './demo.js';
+import { buildPatternRequest, parsePatternDump } from './sysex.js';
 import { PanelLook } from './looks/panel.js';
 import { PillarsLook } from './looks/pillars.js';
 import { RollLook } from './looks/roll.js';
@@ -116,7 +123,9 @@ class DigitaktMode {
   async _connectMidi() {
     if (!navigator.requestMIDIAccess) { this.source = 'no Web MIDI here — demo'; return; }
     try {
-      this.midi = await navigator.requestMIDIAccess({ sysex: false });
+      // SysEx lets us read the pattern; if refused, fall back to notes/clock only
+      try { this.midi = await navigator.requestMIDIAccess({ sysex: true }); this.sysex = true; }
+      catch (_) { this.midi = await navigator.requestMIDIAccess({ sysex: false }); this.sysex = false; }
       const attach = () => {
         const names = [];
         for (const inp of this.midi.inputs.values()) {
@@ -128,6 +137,8 @@ class DigitaktMode {
         const dt = names.find(n => /digitakt|elektron/i.test(n));
         this.inputNames = names;
         this.deviceName = dt ?? '';
+        this.dtOut = this.sysex ? [...this.midi.outputs.values()].find(o => /digitakt|elektron/i.test(o.name)) ?? null : null;
+        this.dump = { pending: 0, last: -1e9, fails: 0, ms: 0, slot: -1, ...(this.dump ?? {}), want: true };
         this.hudUntil = performance.now() + 4000;
       };
       attach();
@@ -140,6 +151,8 @@ class DigitaktMode {
   _onMidi(e) {
     if (!this.mounted) return;
     const now = performance.now();
+    const d = e.data;
+    if (d[0] === 0xf0 || (this._sx && !(d.length === 1 && d[0] >= 0xf8))) { this._sysexIn(d, now); return; }
     this.realName = e.target?.name ?? 'MIDI';
     // first real message: the demo steps aside for good (X brings it back)
     if (!this.realSeen) {
@@ -152,7 +165,47 @@ class DigitaktMode {
         this.state.usedMidiTracks = false;
       }
     }
-    this.state.feed(e.data, now, 'midi');
+    const st = this.state;
+    const wasPlaying = st.playing, pat = st.pattern;
+    st.feed(d, now, 'midi');
+    // re-read the pattern when it can have changed under us
+    if ((st.playing && !wasPlaying) || st.pattern !== pat) this._wantDump();
+  }
+
+  // ── pattern over SysEx ──────────────────────────────────────────────
+  _wantDump() { if (this.dump) this.dump.want = true; }
+
+  _pollDump(now) {
+    const D = this.dump;
+    if (!D || !this.dtOut) return;
+    if (D.pending) {
+      if (now - D.pending > 3000) { D.pending = 0; D.fails++; this._sx = null; D.last = now; }
+      return;
+    }
+    if (D.fails >= 4) return;                       // box doesn't answer — give up quietly
+    const every = 1500 + D.ms * 3;                  // never more than ~25 % of the link
+    if (!D.want && now - D.last < every) return;
+    if (now - D.last < 250) return;
+    D.want = false; D.pending = now; D.slot = this.state.pattern;
+    try { this.dtOut.send(buildPatternRequest(D.slot)); } catch (_) { D.pending = 0; D.fails++; }
+  }
+
+  _sysexIn(d, now) {
+    if (d[0] === 0xf0) this._sx = [];
+    if (!this._sx) return;
+    for (const b of d) this._sx.push(b);
+    if (this._sx[this._sx.length - 1] !== 0xf7) return;
+    const msg = Uint8Array.from(this._sx);
+    this._sx = null;
+    const p = parsePatternDump(msg);
+    const D = this.dump;
+    if (!p || !D) return;
+    this.state.lastRealT = now;
+    if (p.error) { D.err = p.error; D.fails++; D.pending = 0; D.last = now; return; }
+    D.ms = now - (D.pending || now); D.pending = 0; D.last = now; D.fails = 0; D.err = '';
+    if (p.slot !== this.state.pattern) { D.want = true; return; }   // stale answer for a pattern we left
+    if (!this.realSeen) { this.realSeen = true; this.demoWanted = false; if (this.demo.running) { this.demo.stop(now); for (const tr of this.state.tracks) tr.muted = false; } }
+    this.state.setPattern(p, now);
   }
 
   // ── loop ────────────────────────────────────────────────────────────
@@ -169,6 +222,7 @@ class DigitaktMode {
     if (this.demoWanted && !this.demo.running) this.demo.start(now);
     if (!this.demoWanted && this.demo.running) this.demo.stop(now);
     this.demo.update(now);
+    this._pollDump(now);
     st.update(dt);
 
     const { ctx, w, h, dpr } = this;
@@ -194,14 +248,20 @@ class DigitaktMode {
     const bpm = st.bpm > 0 && st.playing ? ` · ${st.bpm.toFixed(0)} BPM` : '';
     const showHelp = now < this.hudUntil;
     const narrow = this.w < 600;
-    const text = `DIGITAKT · ${this.lookIdx + 1}/${LOOKS.length} ${look} · ${src}${bpm} · ${st.patternName()}` +
-      (showHelp ? (narrow ? '\ntap = next look' : '\nL next look · 1–4 pick · X demo · I monitor · F fullscreen · Esc exit · tap = next look') : '');
+    const D = this.dump;
+    const sync = this.demo.running ? '' : !this.midi ? '' : !this.sysex ? ' · no SysEx permission — trigs only from notes'
+      : !this.dtOut ? '' : st.seq ? ` · ${st.tracks[st.viewTrack()].name}${st.focusTrack < 0 ? ' (T)' : ''}`
+      : D?.fails >= 4 ? ` · pattern not readable${D.err ? ' (' + D.err + ')' : ''} — see I` : ' · reading pattern…';
+    const text = `DIGITAKT · ${this.lookIdx + 1}/${LOOKS.length} ${look} · ${src}${bpm} · ${st.patternName()}${sync}` +
+      (showHelp ? (narrow ? '\ntap = next look' : '\nL next look · 1–4 pick · T track · X demo · I monitor · F fullscreen · Esc exit · tap = next look') : '');
     if (text !== this._hudText) { this.hud.textContent = text; this._hudText = text; }
     this.hud.style.opacity = showHelp ? '1' : '0.45';
     if (this.showMonitor) {
       this.mon.style.display = 'block';
       const m = st.monitor.map(l => l.split('​')[0]).join('\n');
-      const head = `MIDI in: ${(this.inputNames ?? []).join(', ') || '—'} · auto ch ${st.autoChannel} · ${this.fps.toFixed(0)} fps\n`;
+      const D = this.dump;
+      const sx = !this.sysex ? 'SysEx: no permission' : !this.dtOut ? 'SysEx: no Digitakt output' : st.seq ? `SysEx: ${st.patternName()} ok · ${D.ms.toFixed(0)} ms` : `SysEx: ${D.fails} fails${D.err ? ' · ' + D.err : ''}`;
+      const head = `MIDI in: ${(this.inputNames ?? []).join(', ') || '—'} · auto ch ${st.autoChannel} · ${this.fps.toFixed(0)} fps\n${sx}\n`;
       if (m + head !== this._monText) { this.mon.textContent = head + m; this._monText = m + head; }
     } else this.mon.style.display = 'none';
   }
@@ -214,8 +274,9 @@ class DigitaktMode {
     if (k === 'l' || e.key === 'ArrowRight') this.setLook(this.lookIdx + 1);
     else if (e.key === 'ArrowLeft') this.setLook(this.lookIdx - 1);
     else if (k >= '1' && k <= String(LOOKS.length)) this.setLook(+k - 1);
-    else if (k === 'x') { this.demoWanted = !this.demoWanted; this.hudUntil = performance.now() + 2500; }
+    else if (k === 'x') { this.demoWanted = !this.demoWanted; if (this.demoWanted) this.state.seq = null; this.hudUntil = performance.now() + 2500; }
     else if (k === 'i') this.showMonitor = !this.showMonitor;
+    else if (k === 't') { const s = this.state; s.focusTrack = s.focusTrack >= 7 ? -1 : s.focusTrack + 1; this.hudUntil = performance.now() + 2500; }
     else if (k === 'f') { if (document.fullscreenElement) document.exitFullscreen(); else this.root.requestFullscreen?.(); }
     else if (e.key === 'Escape') this.unmount();
     else if (k === 'd') this.unmount();
