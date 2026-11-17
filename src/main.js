@@ -38,6 +38,8 @@ import { WledSync }           from './wled.js';
 import { WledKeys }           from './wledkeys.js';
 import { GestureControl }     from './gesture.js';
 import posthogLib from 'posthog-js';
+import { initHud }            from './ui/hud.js';
+import { renderDemoTrack, toWav } from './demo-track.js';
 
 // Analytics key comes from the environment (.env.local / Vercel env) — never
 // hardcode it: the client bundle is public. Without a key, analytics no-op.
@@ -347,14 +349,12 @@ document.getElementById('btn-random-tune').addEventListener('click', randomizeTu
 
 // ── Tutorial ─────────────────────────────────────────────────────────
 const TUTORIAL_STEPS = [
-  { el: null,                title: 'Welcome to Bloom',  text: 'Bloom turns sound into light. Connect a MIDI keyboard or audio source and 25,000 particles react in real time.\n\nThis tour explains each control.' },
-  { el: '#btn-midi',         title: 'MIDI',              text: 'Connect a MIDI keyboard or controller. Each note fires a ripple wave — pitch maps to horizontal position on screen.' },
-  { el: '#btn-system',       title: 'Audio Source',      text: 'System Audio captures everything playing on your Mac, no driver needed. Or use Microphone, or load a file.\n\nEach audio band (bass, drums, melody) drives its own particle layer independently.' },
-  { el: '#btn-tune',         title: 'Tune',              text: 'Open this panel to mute or solo each instrument band, switch movement styles (Burst, Shockwave…), or adjust sensitivity sliders.\n\nThe Bass slider controls how many particles are visible.' },
-  { el: '#btn-color',        title: 'Band Colors',       text: 'Toggle debug colors:\nRed = drums\nBlue = bass\nGreen = lead\nMagenta = atmosphere\nOrange = pads\n\nUseful for tuning your mix.' },
-  { el: '#mode-select',      title: 'Visual modes',      text: 'Pick a world: particles, silk ribbons, liquid metal, a fractal cathedral, sand resonance figures, a thunderstorm and more.' },
-  { el: '#btn-train',        title: 'Train',             text: 'Teach Bloom which frequencies belong to which instrument by tapping along in rhythm with each band.\n\nHelps when automatic detection is off.' },
-  { el: '#btn-ripple-color', title: 'Ripple Color',      text: 'Pick the accent color for MIDI note ripple waves using this color swatch.' },
+  { el: null,           title: 'Welcome to Bloom',  text: 'Bloom turns sound into light: tempo, drops, key and MIDI notes drive every world.\n\nThis tour shows the five controls that matter during a set.' },
+  { el: '#btn-mode',    title: 'Worlds',            text: 'Pick a world — STAGE is the 3D club, the rest are 2D fields. ← → step through them, M opens the full list.' },
+  { el: '#pill-audio',  title: 'Sound',             text: 'Current source. Click to switch: system audio (anything on this Mac), microphone, a file, or the demo beat.' },
+  { el: '#btn-vj',      title: 'Auto-VJ',           text: 'Lets Bloom change worlds on phrase borders and drops. Picking a world yourself pauses it for 45 s.' },
+  { el: '#menus',       title: 'Look · Output · Setup', text: 'LOOK: colour lock, genre, preset bank, share link.\nOUTPUT: projector window, recording, WLED strip.\nSETUP: band tuning, training, meters, gestures.' },
+  { el: '#btn-help',    title: 'Hands off',         text: 'The bar fades after a few seconds. H hides everything for the show, F goes fullscreen, ? lists every shortcut.' },
 ];
 
 let tutStep = -1;
@@ -413,7 +413,8 @@ function showTutStep(n) {
 function openTutorial() {
   tutStep = 0;
   tutOverlay.classList.add('active');
-  uiEl.classList.remove('faded');
+  hud?.closeWelcome();
+  document.body.classList.remove('idle');
   uiEl.classList.add('tutorial-open');
   btnHelp.classList.add('active');
   showTutStep(0);
@@ -427,10 +428,7 @@ function closeTutorial() {
   document.querySelectorAll('.tut-highlight').forEach(e => e.classList.remove('tut-highlight'));
 }
 
-btnHelp.addEventListener('click', () => {
-  if (tutStep >= 0) { closeTutorial(); posthog.capture('tutorial_closed', { step: tutStep }); }
-  else { openTutorial(); posthog.capture('tutorial_opened'); }
-});
+// '?' now opens the shortcuts sheet (ui/hud.js); the tour starts from there
 tutNextBtn.addEventListener('click', () => {
   if (tutStep === TUTORIAL_STEPS.length - 1) {
     closeTutorial();
@@ -566,6 +564,10 @@ const midi     = new MIDIHandler({
     wledKeys.noteOn(pitch, velocity, channel);
     if (channel === 9) return;   // drum pads light the strip but must not pollute harmony
     harmony.noteOn(pitch, velocity);
+    if (currentMode === 'stage') {   // STAGE drains this queue each frame (screens flash by pitch)
+      (params.noteQueue ??= []).push({ pitch, vel: velocity / 127 });
+      if (params.noteQueue.length > 32) params.noteQueue.shift();
+    }
     ripples.spawn(pitch);
     lastMidiMs = performance.now();
     // universal impulse: every mode answers a played note, no mapping needed
@@ -844,16 +846,24 @@ btnProj.addEventListener('click', () => {
 });
 
 // Debug/test handle — lets automated tests read live analysis state
-window.__bloom = { beat, harmony, audio, params, structure, autovj, drift, midiCC: handleMidiCC, wledKeys, wled };
+window.__bloom = { beat, harmony, audio, params, structure, autovj, drift, midiCC: handleMidiCC, wledKeys, wled, renderer };
 
 // ── Preset / mode ────────────────────────────────────────────────────
-let currentMode = 'particles';  // 'particles' | 'oscilloscope' | 'ascii' | 'silk' | 'flora'
+let currentMode = 'particles';  // key of MODES (see init)
+let hud = null;                 // ui/hud.js controller, created in init()
 
 function onConnected(label) {
   statusAudio.textContent = `Audio: ${label}`;
   statusAudio.classList.add('active');
   drift.reseed();   // each source/track gets its own generative character
-  setTimeout(() => uiEl.classList.add('faded'), 1800);
+  setTimeout(() => hud?.closeWelcome(), 700);
+}
+
+// STAGE (3D, Three.js) is loaded on demand — the 2D start-up never pays for it
+let _stageMod = null;
+async function loadStage() {
+  _stageMod ??= await import('./stage/stage.js');
+  return _stageMod.StagePreset;
 }
 
 async function init() {
@@ -861,9 +871,18 @@ async function init() {
     await renderer.init();
     await renderer.loadPreset(ParticlesPreset);
   } catch (e) {
-    errorEl.style.display = 'block';
-    errorEl.textContent   = e.message;
-    return;
+    // No WebGPU (older Safari/WebKit, some Linux): the 2D worlds can't run,
+    // but STAGE renders through Three.js's WebGL2 backend — boot into it.
+    console.warn('WebGPU unavailable, falling back to STAGE on WebGL2:', e.message);
+    try {
+      await renderer.loadPreset(await loadStage());
+      currentMode = 'stage';
+      document.body.classList.add('no-webgpu');
+    } catch (e2) {
+      errorEl.style.display = 'block';
+      errorEl.textContent   = e.message + ' · ' + e2.message;
+      return;
+    }
   }
 
   // Mode switch: particles ↔ oscilloscope ↔ ascii ↔ silk ↔ flora
@@ -895,7 +914,9 @@ async function init() {
     bz:           BzPreset,
     pendulum:     PendulumPreset,
     frost:        FrostPreset,
+    stage:        'lazy',        // resolved by resolveMode() → StagePreset
   };
+  const resolveMode = async (mode) => MODES[mode] === 'lazy' ? loadStage() : MODES[mode];
   const modeSelect = document.getElementById('mode-select');
 
   // Mode-specific controls appear only in their mode
@@ -910,13 +931,16 @@ async function init() {
     document.getElementById('kino-panel').classList.toggle('hidden', mode !== 'kino');
     document.getElementById('type-panel').classList.toggle('hidden', mode !== 'type');
   }
-  updateModeControls('particles');
+  updateModeControls(currentMode);
+  modeSelect.value = currentMode;
 
   async function setMode(mode) {
+    if (!renderer.webgpu && mode !== 'stage') return;   // WebGL2 fallback: STAGE only
     currentMode = mode;
-    await renderer.loadPreset(MODES[mode]);
+    await renderer.loadPreset(await resolveMode(mode));
     modeSelect.value = mode;
     updateModeControls(mode);
+    hud?.onMode(mode);
     posthog.capture('mode_changed', { mode });
   }
   window.__setMode = setMode;   // tests + AutoVJ preset rotation
@@ -1166,11 +1190,11 @@ async function init() {
   // (drops sometimes, every 16 phrases otherwise). Backs off for 45 s after
   // a manual pick so the user always wins.
   // city/galaxy join the pool once their presets land (stubs render black)
-  const VJ_PRESET_POOL = ['particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism', 'type', 'physarum', 'aurora', 'fireflies', 'abyss', 'frost', 'bz', 'pendulum'];   // fx needs media — manual only
+  const VJ_PRESET_POOL = ['stage', 'particles', 'silk', 'flora', 'fluid', 'void', 'cymatics', 'storm', 'terra', 'swarm', 'galaxy', 'glass', 'acid', 'prism', 'type', 'physarum', 'aurora', 'fireflies', 'abyss', 'frost', 'bz', 'pendulum'];   // fx needs media — manual only
   // Dramaturgy: quiet passages get contemplative worlds, peaks get raw
   // energy; build-ups never switch (the tension must resolve where it grew)
   const VJ_CALM = ['abyss', 'fireflies', 'glass', 'silk', 'flora', 'physarum', 'aurora', 'frost', 'fluid', 'bz', 'pendulum'];
-  const VJ_PEAK = ['swarm', 'void', 'storm', 'particles', 'cymatics', 'terra', 'acid', 'prism', 'galaxy'];
+  const VJ_PEAK = ['stage', 'swarm', 'void', 'storm', 'particles', 'cymatics', 'terra', 'acid', 'prism', 'galaxy'];
   let _phrasesSincePreset = 0;
   const _recentModes = [];
 
@@ -1185,7 +1209,7 @@ async function init() {
   }
 
   function autoRotate(st) {
-    if (!autovj.enabled || _switching) return;
+    if (!autovj.enabled || _switching || !renderer.webgpu) return;
     if (performance.now() - lastManualModeMs < 45000) return;
     if (st.state === 'build') return;                       // hold through the build
     const pool = (st.state === 'quiet' || st.state === 'breakdown') ? VJ_CALM
@@ -1395,6 +1419,33 @@ async function init() {
 
   updateTrainUI();
 
+  // Demo beat: the synthetic test track, rendered in the browser on demand
+  async function connectDemo() {
+    statusAudio.classList.remove('error');
+    try {
+      const sr = 44100;
+      const file = new File([toWav(renderDemoTrack(sr), sr)], 'demo-beat-126bpm.wav', { type: 'audio/wav' });
+      await audio.connectFile(file);
+      onConnected('demo beat');
+      showTransport('demo beat · 126 BPM');
+      posthog.capture('audio_connected', { source: 'demo' });
+    } catch (e) { console.error('Demo:', e); showAudioError(e); }
+  }
+
+  hud = initHud({
+    getMode: () => currentMode,
+    switchMode: (m) => { if (m === currentMode) return; lastManualModeMs = performance.now(); switchModeCinematic(m, 'fade'); },
+    modeIds: () => Object.keys(MODES),
+    stage: () => (renderer.preset?.selfPresent ? renderer.preset : null),
+    webgpu: renderer.webgpu,
+    beat,
+    onDemo: connectDemo,
+    openTour: openTutorial,
+    hasSource: () => statusAudio.classList.contains('active'),
+  });
+  hud.onMode(currentMode);
+  window.__hud = hud;
+
   // ── Transport ──────────────────────────────────────────────────────
   const transportEl      = document.getElementById('transport');
   const transportNameEl  = document.getElementById('transport-name');
@@ -1474,7 +1525,7 @@ async function init() {
     hideTransport();
     statusAudio.textContent = 'Audio: not connected';
     statusAudio.classList.remove('active');
-    uiEl.classList.remove('faded');
+    hud?.openWelcome();
   });
 
   // ── Video recording ────────────────────────────────────────────────
@@ -1594,6 +1645,9 @@ async function init() {
     drift.update(dtS, fftEnergy);
     params.tension    = st.tension;
     params.dropPulse  = st.dropPulse;
+    params.structState = st.state;          // STAGE camera director reads these
+    params.phrase      = st.phrase;
+    if (st.onDrop) params.dropCount = (params.dropCount ?? 0) + 1;
     params.driftScale = drift.scale;
     params.driftRot   = drift.rot;
     // Composition centre = slow generative wander + the scene's committed offset
