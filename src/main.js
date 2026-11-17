@@ -40,6 +40,7 @@ import { GestureControl }     from './gesture.js';
 import posthogLib from 'posthog-js';
 import { initHud }            from './ui/hud.js';
 import { renderDemoTrack, toWav } from './demo-track.js';
+import { installDigitakt, digitaktActive } from './digitakt/index.js';
 
 // Analytics key comes from the environment (.env.local / Vercel env) — never
 // hardcode it: the client bundle is public. Without a key, analytics no-op.
@@ -936,8 +937,18 @@ async function init() {
 
   async function setMode(mode) {
     if (!renderer.webgpu && mode !== 'stage') return;   // WebGL2 fallback: STAGE only
+    const prev = currentMode;
     currentMode = mode;
-    await renderer.loadPreset(await resolveMode(mode));
+    try {
+      await renderer.loadPreset(await resolveMode(mode));
+    } catch (e) {
+      // e.g. the STAGE chunk failed to download — never leave a black screen
+      console.error(`[mode] ${mode} failed to load:`, e);
+      hud?.say(`${mode.toUpperCase()} failed to load`, 'staying on the previous world');
+      currentMode = prev;
+      if (prev !== mode) { try { await renderer.loadPreset(await resolveMode(prev)); } catch (_) {} }
+      return;
+    }
     modeSelect.value = mode;
     updateModeControls(mode);
     hud?.onMode(mode);
@@ -1442,6 +1453,7 @@ async function init() {
     onDemo: connectDemo,
     openTour: openTutorial,
     hasSource: () => statusAudio.classList.contains('active'),
+    keysBlocked: digitaktActive,   // the Digitakt overlay owns the keyboard while open
   });
   hud.onMode(currentMode);
   window.__hud = hud;
@@ -1603,8 +1615,11 @@ async function init() {
   }
 
   function frame(ts) {
+    // Digitakt overlay owns the screen: analysis, beat grid, WLED, REC keep
+    // running underneath — only the world renderer pauses (see render below)
+    const overlay = digitaktActive();
     const dtS = Math.min(ts - (lastFrameTs || ts), 50) / 1000;
-    adaptDpr(ts, dtS * 1000);
+    if (!overlay) adaptDpr(ts, dtS * 1000);
     lastFrameTs = ts;
 
     const rawBands = audio.update();
@@ -1724,7 +1739,7 @@ async function init() {
     fieldMs += dtS * 1000 * (1 + st.tension * 0.6) * _gestTime;
     // A preset throwing once must not kill the whole animation loop
     try {
-      renderer.render(fieldMs, bands, params);
+      if (!overlay) renderer.render(fieldMs, bands, params);
     } catch (e) {
       if ((window.__renderErrs = (window.__renderErrs ?? 0) + 1) < 5) console.error('[render]', e);
     }
@@ -1802,4 +1817,5 @@ async function init() {
   }
 }
 
+installDigitakt();
 init();

@@ -13,17 +13,39 @@ import { Looks, LOOKS } from './looks.js';
 // pulse, tension, dropPulse, structState, phrase, dropCount, noteQueue.
 let _lookIdx = 0;   // survives mode switches within a session
 
+// One WebGPURenderer per GPUDevice, reused across STAGE visits. three r187
+// registers a device.lost closure per renderer that is never released, so a
+// fresh renderer per visit (Auto-VJ rotates through STAGE) would leak each one.
+// Between visits the 2D presets reconfigure the shared canvas context, so on
+// re-entry we put back three's configuration.
+let _shared = null;
+async function sharedRenderer(device, canvas) {
+  if (_shared && _shared.device === device && _shared.canvas === canvas) {
+    if (device) {
+      canvas.getContext('webgpu').configure({
+        device, format: navigator.gpu.getPreferredCanvasFormat(),
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+        alphaMode: 'opaque', toneMapping: { mode: 'standard' },
+      });
+    }
+    return _shared.r;
+  }
+  const opts = { canvas, antialias: false, alpha: false, powerPreference: 'high-performance' };
+  if (device) { opts.device = device; opts.context = canvas.getContext('webgpu'); }
+  else opts.forceWebGL = true;
+  const r = new THREE.WebGPURenderer(opts);
+  await r.init();
+  _shared = { device, canvas, r };
+  return r;
+}
+
 export class StagePreset {
   static get LOOKS() { return LOOKS; }
   get selfPresent() { return true; }
 
   async init(device, format, canvas) {
     this.canvas = canvas;
-    const opts = { canvas, antialias: false, alpha: false, powerPreference: 'high-performance' };
-    if (device) { opts.device = device; opts.context = canvas.getContext('webgpu'); }
-    else opts.forceWebGL = true;
-    this.r = new THREE.WebGPURenderer(opts);
-    await this.r.init();
+    this.r = await sharedRenderer(device, canvas);
     this.r.setPixelRatio(1);
     this.r.setSize(canvas.width, canvas.height, false);
     this.r.toneMapping = THREE.ACESFilmicToneMapping;
@@ -181,6 +203,6 @@ export class StagePreset {
   destroy() {
     this.looks?.dispose();
     this.scene?.traverse(o => { o.geometry?.dispose?.(); o.material?.dispose?.(); });
-    this.r?.dispose();
+    // the renderer itself is shared (see sharedRenderer) — not disposed here
   }
 }

@@ -102,6 +102,14 @@ export function initHud(api) {
       grid.append(b);
     }
   }
+  if (document.getElementById('btn-digitakt')) {
+    const h = document.createElement('div'); h.className = 'pal-group'; h.textContent = 'Instruments';
+    const b = document.createElement('button');
+    b.className = 'pal-tile';
+    b.innerHTML = '<b>DIGITAKT</b><small>Line-art Elektron Digitakt with looks driven by its MIDI — tracks, knobs, mutes. Works on phones too.</small>';
+    b.addEventListener('click', () => { togglePalette(false); $('btn-digitakt').click(); });
+    grid.append(h, b);
+  }
   function togglePalette(on = !pal.classList.contains('open')) {
     pal.classList.toggle('open', on);
     if (on) { closeMenus(); grid.querySelectorAll('.pal-tile').forEach(t => t.classList.toggle('active', t.dataset.mode === api.getMode())); }
@@ -193,6 +201,7 @@ export function initHud(api) {
   const click = (id) => $(id)?.click();
   window.addEventListener('keydown', (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (api.keysBlocked?.()) return;
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
     if (!$('zone-panel').classList.contains('hidden')) return;     // WLED calibration owns the keys
@@ -209,7 +218,7 @@ export function initHud(api) {
     else if (k === 'f' || k === 'F') toggleFull();
     else if (k === 't' || k === 'T') click('btn-tune');
     else if (k === 'b' || k === 'B') click('btn-bpm');
-    else if (k === 'd' || k === 'D') click('btn-debug');
+    else if (k === 'g' || k === 'G') click('btn-debug');   // D belongs to Digitakt (src/digitakt)
     else if (k === 'p' || k === 'P') click('btn-proj');
     else if (k === 'x' || k === 'X') { const st = api.stage(); if (st) { st.flash?.(); } else handled = false; }
     else if (k === '?' || k === '/') toggleHelp();

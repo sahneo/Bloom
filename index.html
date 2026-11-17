@@ -1140,7 +1140,7 @@
     @media (max-width: 760px) {
       #hud { padding: 10px; padding-top: max(10px, env(safe-area-inset-top)); }
       .hud-mid { display: none !important; }
-      #btn-full, #btn-pal, #btn-prism-env { display: none; }
+      #btn-full, #btn-pal, #btn-prism-env, #btn-digitakt { display: none; }
       #btn-mode { min-width: 0; }
       #stage-ctl { position: fixed; left: 10px; right: 10px; top: calc(56px + env(safe-area-inset-top)); justify-content: center; flex-wrap: wrap; }
       .hb, .chip { min-height: 40px; }
@@ -1255,6 +1255,7 @@
   </div>
   <div class="hud-right">
     <button id="btn-vj" class="hb active" title="Auto-VJ: rotates worlds on phrases and drops (V)">AUTO-VJ</button>
+    <button id="btn-digitakt" class="hb" title="Digitakt mode: line-art Digitakt + looks driven by its MIDI (D)">DT</button>
     <button id="btn-more" class="hb" title="Menu">☰</button>
     <div id="menus">
       <div class="menu">
@@ -1331,7 +1332,8 @@
       <kbd>P</kbd><span>projector window</span>
       <kbd>T</kbd><span>tune panel</span>
       <kbd>B</kbd><span>metronome</span>
-      <kbd>D</kbd><span>debug meters</span>
+      <kbd>D</kbd><span>Digitakt mode (overlay driven by its MIDI)</span>
+      <kbd>G</kbd><span>debug meters</span>
       <kbd>Space</kbd><span>tap tempo (while TRAIN is open)</span>
       <kbd>Esc</kbd><span>close panels</span>
     </div>
