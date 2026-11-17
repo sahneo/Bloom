@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Bloom</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <meta property="og:title"       content="Bloom" />
@@ -1041,6 +1041,122 @@
       text-align: center;
       display: none;
     }
+
+    /* ═══ v3 UI: welcome · HUD · palette · help · idle ═════════════════ */
+    :root { --glass: rgba(10,10,14,0.78); --line: rgba(255,255,255,0.12); --dim: rgba(255,255,255,0.55); --acc: #7dffb3; }
+    kbd { font: 600 0.62rem 'SF Mono', Menlo, monospace; padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px; background: rgba(255,255,255,0.06); color: #fff; }
+
+    /* welcome card */
+    #ui { pointer-events: all; background: radial-gradient(ellipse at center, rgba(0,0,0,0.25), rgba(0,0,0,0.7)); transition: opacity 0.35s ease; overflow-y: auto; padding: 24px 16px; justify-content: safe center; z-index: 30; }
+    #ui.done, #ui.faded.done { opacity: 0; pointer-events: none; }
+    #ui.faded:not(.done) { opacity: 1; pointer-events: all; }
+    .welcome-card { position: relative; width: min(640px, 100%); background: var(--glass); border: 1px solid var(--line); border-radius: 16px; padding: 28px 28px 20px; backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); display: flex; flex-direction: column; gap: 10px; }
+    .wc-close { position: absolute; top: 12px; right: 12px; padding: 4px 10px; font-size: 0.8rem; opacity: 0.6; }
+    .wc-brand { font-size: 1.05rem; font-weight: 300; letter-spacing: 0.45em; opacity: 0.85; }
+    .wc-tag { font-size: 0.86rem; line-height: 1.45; color: var(--dim); margin-bottom: 6px; }
+    .wc-step { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(255,255,255,0.85); }
+    .wc-step em { font-style: normal; text-transform: none; letter-spacing: 0.02em; color: rgba(255,255,255,0.4); }
+    .wc-n { width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.35); display: inline-flex; align-items: center; justify-content: center; font-size: 0.6rem; letter-spacing: 0; }
+    .src-grid, .world-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .src-btn { text-align: left; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; border-radius: 10px; min-height: 64px; letter-spacing: 0; }
+    .src-btn b { font-size: 0.84rem; font-weight: 600; color: #fff; letter-spacing: 0.02em; }
+    .src-btn small { font-size: 0.7rem; line-height: 1.35; color: rgba(255,255,255,0.5); }
+    .src-btn.wide { width: 100%; }
+    .src-btn.active, .src-btn.on { border-color: rgba(125,255,179,0.6); background: rgba(125,255,179,0.08); }
+    #btn-midi.active { border-color: rgba(125,255,179,0.6); background: rgba(125,255,179,0.08); }
+    .world-btn[data-mode="stage"] b::after { content: ' NEW'; font-size: 0.55rem; color: var(--acc); letter-spacing: 0.1em; vertical-align: 2px; }
+    #ui .status-row { justify-content: center; margin-top: 4px; flex-wrap: wrap; }
+    .wc-foot { text-align: center; font-size: 0.66rem; color: rgba(255,255,255,0.4); margin-top: 2px; }
+
+    /* HUD */
+    #hud { position: fixed; top: 0; left: 0; right: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; z-index: 20; pointer-events: none; transition: opacity 0.5s ease, transform 0.5s ease; }
+    #hud > div { display: flex; align-items: center; gap: 6px; pointer-events: all; }
+    .hb { padding: 7px 11px; font-size: 0.68rem; letter-spacing: 0.1em; background: rgba(10,10,14,0.55); border-color: rgba(255,255,255,0.12); color: rgba(255,255,255,0.8); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+    .hb.active { border-color: rgba(125,255,179,0.55); color: #fff; }
+    #btn-mode { display: inline-flex; align-items: baseline; gap: 8px; min-width: 150px; justify-content: space-between; font-weight: 600; }
+    #mode-sub { font-weight: 400; color: rgba(255,255,255,0.45); font-size: 0.6rem; }
+    #btn-mode .caret { opacity: 0.4; font-size: 0.6rem; }
+    #btn-prev, #btn-next { padding: 7px 10px; font-size: 0.85rem; line-height: 1; }
+    #mode-select { display: none; }
+    #stage-ctl { display: flex; gap: 4px; align-items: center; margin-left: 4px; }
+    #stage-ctl.hidden { display: none; }
+    #stage-looks { display: flex; gap: 4px; }
+    .chip { padding: 6px 9px; font-size: 0.6rem; letter-spacing: 0.1em; border-radius: 20px; background: rgba(10,10,14,0.5); color: rgba(255,255,255,0.6); }
+    .chip.active { color: #000; background: rgba(255,255,255,0.88); border-color: transparent; }
+    .pill { padding: 5px 10px; font-size: 0.62rem; letter-spacing: 0.06em; border-radius: 20px; background: rgba(10,10,14,0.45); color: rgba(255,255,255,0.45); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pill.on { color: var(--acc); border-color: rgba(125,255,179,0.35); }
+    #btn-more { display: none; }
+    #menus { display: flex; gap: 6px; }
+    .menu { position: relative; }
+    .menu.open > .menu-btn { border-color: rgba(255,255,255,0.4); color: #fff; }
+    .menu-pop { position: absolute; top: calc(100% + 8px); right: 0; min-width: 330px; background: var(--glass); border: 1px solid var(--line); border-radius: 12px; padding: 8px; display: none; flex-direction: column; gap: 2px; backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+    .menu.open > .menu-pop { display: flex; }
+    .mrow { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 8px; }
+    .mrow:hover { background: rgba(255,255,255,0.04); }
+    .mrow > button, .mrow > select, .mrow > input { flex-shrink: 0; font-size: 0.64rem; letter-spacing: 0.08em; padding: 6px 10px; min-width: 64px; opacity: 1 !important; position: static !important; }
+    .mrow > button.active { border-color: rgba(125,255,179,0.55); color: #fff; }
+    .mcap { font-size: 0.66rem; color: rgba(255,255,255,0.45); line-height: 1.3; }
+    .mcap code { font-size: 0.6rem; color: rgba(255,255,255,0.65); }
+    #hud #btn-tune, #hud #btn-record { position: static !important; bottom: auto !important; right: auto !important; opacity: 1; }
+    #hud #wled-host { width: 120px; min-width: 120px; }
+    #hud select { background: rgba(255,255,255,0.06); color: #ddd; border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; }
+
+    /* toast (reuses #preset-label) */
+    #preset-label { position: fixed; left: 50%; bottom: 84px; top: auto; right: auto; transform: translate(-50%, 8px); text-align: center; opacity: 0; pointer-events: none; transition: opacity 0.35s, transform 0.35s; z-index: 25; background: rgba(0,0,0,0.45); padding: 10px 18px; border-radius: 10px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); letter-spacing: 0; }
+    #preset-label.show { opacity: 1; transform: translate(-50%, 0); }
+    #preset-label .t-main { font-size: 0.9rem; letter-spacing: 0.3em; font-weight: 500; }
+    #preset-label .t-sub { font-size: 0.68rem; color: rgba(255,255,255,0.55); margin-top: 4px; letter-spacing: 0.02em; max-width: 360px; }
+
+    /* palette + help overlays */
+    #palette, #help { position: fixed; inset: 0; z-index: 40; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.55); padding: 16px; }
+    #palette.open, #help.open { display: flex; }
+    .pal-card, .help-card { width: min(920px, 100%); max-height: 86vh; overflow-y: auto; background: var(--glass); border: 1px solid var(--line); border-radius: 16px; padding: 18px; backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+    .help-card { width: min(520px, 100%); }
+    .pal-head { display: flex; justify-content: space-between; align-items: center; font-size: 0.72rem; letter-spacing: 0.2em; text-transform: uppercase; margin-bottom: 10px; }
+    #palette-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+    .pal-group { grid-column: 1 / -1; font-size: 0.6rem; letter-spacing: 0.2em; text-transform: uppercase; color: rgba(255,255,255,0.4); margin-top: 8px; }
+    .pal-tile { text-align: left; display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 10px; min-height: 66px; }
+    .pal-tile b { font-size: 0.74rem; letter-spacing: 0.14em; color: #fff; }
+    .pal-tile small { font-size: 0.66rem; line-height: 1.3; color: rgba(255,255,255,0.5); letter-spacing: 0; }
+    .pal-tile.is-3d { grid-column: span 2; background: linear-gradient(120deg, rgba(125,255,179,0.10), rgba(120,140,255,0.08)); }
+    .pal-tile.active { border-color: rgba(125,255,179,0.7); }
+    .keys { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; align-items: center; font-size: 0.74rem; color: rgba(255,255,255,0.75); }
+    .keys kbd { justify-self: start; }
+    .help-note { font-size: 0.68rem; color: rgba(255,255,255,0.45); margin: 14px 0 10px; }
+
+    /* idle: performance mode hides the chrome, keeps panels the user opened */
+    body.idle { cursor: none; }
+    body.idle #hud { opacity: 0; transform: translateY(-8px); pointer-events: none; }
+    body.idle #hud > div { pointer-events: none; }
+    body.idle #transport, body.idle #btn-ripple-color, body.idle #btn-ascii-color, body.idle #btn-sand-color { opacity: 0; pointer-events: none; }
+    #transport { transition: opacity 0.5s; }
+
+    body.no-webgpu #btn-prev, body.no-webgpu #btn-next { display: none; }
+    #hud #btn-help, #hud #btn-full { opacity: 1; position: static; }
+    #hud::before { content: ''; position: absolute; inset: 0 0 -24px 0; background: linear-gradient(rgba(0,0,0,0.5), transparent); pointer-events: none; z-index: -1; }
+    body.sheet-open #hud { z-index: 45; }
+
+    /* ── mobile ── */
+    @media (max-width: 760px) {
+      #hud { padding: 10px; padding-top: max(10px, env(safe-area-inset-top)); }
+      .hud-mid { display: none !important; }
+      #btn-full, #btn-pal, #btn-prism-env, #btn-digitakt { display: none; }
+      #btn-mode { min-width: 0; }
+      #stage-ctl { position: fixed; left: 10px; right: 10px; top: calc(56px + env(safe-area-inset-top)); justify-content: center; flex-wrap: wrap; }
+      .hb, .chip { min-height: 40px; }
+      #btn-more { display: inline-block; }
+      #menus { display: none; position: fixed; left: 0; right: 0; bottom: 0; max-height: 72vh; overflow-y: auto; flex-direction: column; gap: 4px; padding: 12px 12px max(16px, env(safe-area-inset-bottom)); background: rgba(10,10,14,0.94); border-top: 1px solid var(--line); border-radius: 16px 16px 0 0; }
+      body.sheet-open #menus { display: flex; }
+      .menu-btn { pointer-events: none; background: none; border: none; text-align: left; padding: 8px 4px 2px; opacity: 0.5; }
+      .menu-pop { display: flex; position: static; min-width: 0; background: none; border: none; padding: 0; backdrop-filter: none; -webkit-backdrop-filter: none; }
+      .mrow > button, .mrow > select, .mrow > input { min-height: 40px; }
+      .src-grid, .world-grid { grid-template-columns: 1fr; }
+      .welcome-card { padding: 22px 16px 16px; }
+      .pal-tile.is-3d { grid-column: 1 / -1; }
+      #palette-grid { grid-template-columns: 1fr 1fr; }
+      #tune, #train { left: 8px; right: 8px; bottom: 8px; min-width: 0; max-height: 70vh; overflow-y: auto; }
+      #preset-label { bottom: calc(96px + env(safe-area-inset-bottom)); }
+    }
   </style>
 </head>
 <body>
@@ -1048,22 +1164,36 @@
 <canvas id="canvas"></canvas>
 
 <div id="ui">
-  <h1>Bloom</h1>
+  <div class="welcome-card">
+    <button id="btn-welcome-close" class="wc-close" title="Close (Esc)">✕</button>
+    <div class="wc-brand">BLOOM</div>
+    <p class="wc-tag">Live visuals that listen. Give it sound — tempo, drops, key and notes are read automatically.</p>
 
-  <div class="connect-row">
-    <button id="btn-midi">Connect MIDI</button>
-    <button id="btn-system">System Audio</button>
-    <button id="btn-mic">Microphone</button>
-    <button id="btn-file">Load File</button>
+    <div class="wc-step"><span class="wc-n">1</span>Sound <em>pick one</em></div>
+    <div class="src-grid">
+      <button id="btn-system" class="src-btn"><b>System audio</b><small>Everything playing on this Mac — Ableton, Spotify, YouTube. Chrome asks to share a tab/screen with audio.</small></button>
+      <button id="btn-mic" class="src-btn"><b>Microphone</b><small>The room — a live set or a speaker nearby</small></button>
+      <button id="btn-file" class="src-btn"><b>Audio file</b><small>Play a track from disk</small></button>
+      <button id="btn-demo" class="src-btn"><b>Demo beat</b><small>Built-in 126 BPM track with a breakdown and a drop — no setup</small></button>
+    </div>
     <input type="file" id="file-input" accept="audio/*,video/*" style="display:none">
-  </div>
 
-  <div class="status-row">
-    <span id="status-midi"  class="status">MIDI: not connected</span>
-    <span id="status-audio" class="status">Audio: not connected</span>
+    <div class="wc-step"><span class="wc-n">2</span>MIDI <em>optional</em></div>
+    <button id="btn-midi" class="src-btn wide"><b>Connect MIDI</b><small>Notes set colour and key, pads flash. From Ableton: enable the IAC bus as a MIDI output.</small></button>
+
+    <div class="wc-step"><span class="wc-n">3</span>World</div>
+    <div class="world-grid">
+      <button class="world-btn src-btn" data-mode="stage"><b>STAGE · 3D</b><small>Stand inside an imagined warehouse club — crowd, hanging screens, beams. Drawn in ASCII.</small></button>
+      <button class="world-btn src-btn active" data-mode="particles"><b>2D worlds</b><small>27 generative fields. Auto-VJ rotates them on phrases and drops.</small></button>
+    </div>
+
+    <div class="status-row">
+      <span id="status-midi"  class="status">MIDI: not connected</span>
+      <span id="status-audio" class="status">Audio: not connected</span>
+    </div>
+    <div class="wc-foot"><kbd>?</kbd> shortcuts · <kbd>H</kbd> hide everything · <kbd>M</kbd> all worlds</div>
   </div>
 </div>
-
 <div id="preset-label">BLOOM</div>
 
 <div id="bpm-widget" class="hidden">
@@ -1076,11 +1206,13 @@
 </div>
 <div id="error"></div>
 
-<div id="top-left">
-  <button id="btn-debug">DEBUG</button>
-  <button id="btn-color">COLOR</button>
-  <button id="btn-train">TRAIN</button>
-  <select id="mode-select" title="Visual mode">
+<div id="hud">
+  <div class="hud-left">
+    <button id="btn-prev" class="hb" title="Previous world (←)">‹</button>
+    <button id="btn-mode" class="hb" title="All worlds (M)"><span id="mode-name">BLOOM</span><span id="mode-sub">2D</span><span class="caret">▾</span></button>
+    <button id="btn-next" class="hb" title="Next world (→)">›</button>
+    <select id="mode-select" title="Visual mode">
+    <option value="stage">STAGE · 3D</option>
     <option value="particles" selected>BLOOM</option>
     <option value="oscilloscope">SCOPE</option>
     <option value="ascii">ASCII</option>
@@ -1109,41 +1241,106 @@
     <option value="abyss">ABYSS</option>
     <option value="frost">FROST</option>
   </select>
-  <button id="btn-pal" title="VOID palette: key / ember / glacier / synth / bone">PAL</button>
-  <button id="btn-prism-env" title="PRISM environment: rich studio or classic void">STUDIO</button>
-  <input type="file" id="media-input" accept="image/*,video/*" multiple style="display:none">
-  <button id="btn-bpm">BPM</button>
-  <select id="genre-select" title="Genre preset — tunes detection and visuals">
+    <div id="stage-ctl" class="hidden">
+      <span id="stage-looks"></span>
+      <button id="btn-shot" class="chip" title="Next camera shot (C)">CAM ↻</button>
+    </div>
+    <button id="btn-pal" class="hb" title="VOID palette: key / ember / glacier / synth / bone">PAL</button>
+    <button id="btn-prism-env" class="hb" title="PRISM environment: rich studio or classic void">STUDIO</button>
+  </div>
+  <div class="hud-mid">
+    <button id="pill-audio" class="pill" title="Sound source">○ add sound</button>
+    <button id="pill-midi" class="pill" title="Connect MIDI">MIDI</button>
+    <button id="pill-bpm" class="pill" title="Tempo (B shows the metronome)">— BPM</button>
+  </div>
+  <div class="hud-right">
+    <button id="btn-vj" class="hb active" title="Auto-VJ: rotates worlds on phrases and drops (V)">AUTO-VJ</button>
+    <button id="btn-digitakt" class="hb" title="Digitakt mode: line-art Digitakt + looks driven by its MIDI (D)">DT</button>
+    <button id="btn-more" class="hb" title="Menu">☰</button>
+    <div id="menus">
+      <div class="menu">
+        <button class="menu-btn hb">LOOK</button>
+        <div class="menu-pop">
+        <div class="mrow"><button id="btn-hue">HUE</button><span class="mcap">Lock every world to one colour</span></div>
+        <div class="mrow"><select id="genre-select" title="Genre preset — tunes detection and visuals">
     <option value="auto" selected>AUTO</option>
     <option value="techno">TECHNO</option>
     <option value="house">HOUSE</option>
     <option value="dnb">DNB</option>
     <option value="hiphop">HIP-HOP</option>
     <option value="ambient">AMBIENT</option>
-  </select>
-  <button id="btn-vj" class="active" title="Auto-VJ: rotates visual modes on musical events">VJ</button>
-  <button id="btn-proj" title="Projector: open a clean output window for a second display">PROJ</button>
-  <button id="btn-share" title="Copy a link that restores this exact look — mode + every dial">SHARE</button>
-  <button id="btn-hue" title="Lock the global palette to one hue — every mode follows it (click again to unlock)">HUE</button>
-  <select id="bank-select" title="Preset bank — pick a slot to recall it instantly">
+  </select><span class="mcap">Genre — tunes tempo detection + visuals</span></div>
+        <div class="mrow"><select id="bank-select" title="Preset bank — pick a slot to recall it instantly">
     <option selected disabled>BANK</option>
     <option>S1 · —</option><option>S2 · —</option><option>S3 · —</option><option>S4 · —</option>
     <option>S5 · —</option><option>S6 · —</option><option>S7 · —</option><option>S8 · —</option>
-  </select>
-  <button id="btn-bank-save" title="Save the current look into the selected bank slot">SAVE</button>
-  <input type="color" id="hue-lock-input" value="#00D9FF" style="display:none">
-  <button id="btn-cam" title="Gesture control: hand pans, pinch zooms, swipe pops (webcam)">CAM</button>
-  <input id="wled-host" type="text" placeholder="WLED IP" spellcheck="false"
-         title="Address of your WLED device (e.g. 192.168.1.19)">
-  <select id="wled-mode" title="SCRN mirrors the visuals; KEYS plays the strip from your MIDI keyboard — each key lights its own spot, pads flash the whole strip, mod wheel sets the afterglow">
+  </select><button id="btn-bank-save">SAVE</button><span class="mcap">Preset bank: pick a slot, SAVE stores the current look</span></div>
+        <div class="mrow"><button id="btn-share">SHARE</button><span class="mcap">Copy a link that restores this exact look</span></div>
+        <div class="mrow"><button id="btn-color">COLOR</button><span class="mcap">Debug colours per band (red drums, blue bass…)</span></div>
+        </div>
+      </div>
+      <div class="menu">
+        <button class="menu-btn hb">OUTPUT</button>
+        <div class="menu-pop">
+        <div class="mrow"><button id="btn-proj">PROJ</button><span class="mcap">Clean output window for a second screen (P)</span></div>
+        <div class="mrow"><button id="btn-record">REC</button><span class="mcap">Record video + audio to .webm</span></div>
+        <div class="mrow"><input id="wled-host" type="text" placeholder="WLED IP" spellcheck="false"
+         title="Address of your WLED device (e.g. 192.168.1.19)"><span class="mcap">WLED IP (needs <code>node tools/wled-relay.mjs</code>)</span></div>
+        <div class="mrow"><select id="wled-mode" title="SCRN mirrors the visuals; KEYS plays the strip from your MIDI keyboard — each key lights its own spot, pads flash the whole strip, mod wheel sets the afterglow">
     <option value="screen">SCRN</option>
     <option value="keys">KEYS</option>
-  </select>
-  <button id="btn-wled" title="Mirror visuals to a WLED strip (needs local relay: node tools/wled-relay.mjs)">WLED</button>
-  <button id="btn-zones" title="Teach Bloom your strip's layout: a white cursor sweeps the chain — press Space at every corner (wall→ceiling, shelf edges). KEYS then plays zones: low keys wash the first run, high keys the last">ZONES</button>
-  <button id="btn-help" title="Tutorial">?</button>
+  </select><button id="btn-wled" title="Mirror visuals to a WLED strip">WLED</button><span class="mcap">SCRN mirrors the picture · KEYS plays the strip from MIDI</span></div>
+        <div class="mrow"><button id="btn-zones" title="Teach Bloom your strip's layout: a white cursor sweeps the chain — press Space at every corner (wall→ceiling, shelf edges). KEYS then plays zones: low keys wash the first run, high keys the last">ZONES</button><span class="mcap">Teach the strip its corners</span></div>
+        </div>
+      </div>
+      <div class="menu">
+        <button class="menu-btn hb">SETUP</button>
+        <div class="menu-pop">
+        <div class="mrow"><button id="btn-tune">TUNE</button><span class="mcap">Band mute/solo, sensitivity, sync (T)</span></div>
+        <div class="mrow"><button id="btn-train">TRAIN</button><span class="mcap">Tap along to teach Bloom each instrument</span></div>
+        <div class="mrow"><button id="btn-bpm">BPM</button><span class="mcap">Metronome widget (B)</span></div>
+        <div class="mrow"><button id="btn-debug">DEBUG</button><span class="mcap">Live band levels + structure (D)</span></div>
+        <div class="mrow"><button id="btn-cam" title="Gesture control: hand pans, pinch zooms, swipe pops (webcam)">CAM</button><span class="mcap">Steer with your hands via webcam</span></div>
+        </div>
+      </div>
+    </div>
+    <button id="btn-full" class="hb" title="Fullscreen (F)">⛶</button>
+    <button id="btn-help" class="hb" title="Shortcuts (?)">?</button>
+    <input type="file" id="media-input" accept="image/*,video/*" multiple style="display:none">
+    <input type="color" id="hue-lock-input" value="#00D9FF" style="display:none">
+  </div>
 </div>
-
+<div id="palette">
+  <div class="pal-card">
+    <div class="pal-head"><span>Worlds</span><button id="palette-close" class="hb">✕</button></div>
+    <div id="palette-grid"></div>
+  </div>
+</div>
+<div id="help">
+  <div class="help-card">
+    <div class="pal-head"><span>Shortcuts</span><button id="help-close" class="hb">✕</button></div>
+    <div class="keys">
+      <kbd>← →</kbd><span>previous / next world</span>
+      <kbd>M</kbd><span>all worlds</span>
+      <kbd>S</kbd><span>STAGE (3D)</span>
+      <kbd>L</kbd><span>STAGE look: ASCII → 1-BIT → THERMAL → RAW</span>
+      <kbd>C</kbd><span>STAGE: next camera shot</span>
+      <kbd>X</kbd><span>STAGE: strobe hit</span>
+      <kbd>V</kbd><span>Auto-VJ on/off</span>
+      <kbd>H</kbd><span>hide all UI (double-tap on touch)</span>
+      <kbd>F</kbd><span>fullscreen</span>
+      <kbd>P</kbd><span>projector window</span>
+      <kbd>T</kbd><span>tune panel</span>
+      <kbd>B</kbd><span>metronome</span>
+      <kbd>D</kbd><span>Digitakt mode (overlay driven by its MIDI)</span>
+      <kbd>G</kbd><span>debug meters</span>
+      <kbd>Space</kbd><span>tap tempo (while TRAIN is open)</span>
+      <kbd>Esc</kbd><span>close panels</span>
+    </div>
+    <p class="help-note">The bar hides itself after a few seconds — move the mouse to bring it back.</p>
+    <button id="help-tour">Take the tour</button>
+  </div>
+</div>
 <div id="zone-panel" class="hidden">
   <div id="zone-info">LED 0</div>
   <div class="zone-hint">SPACE mark corner · ←/→ jog · ⌫ undo · ENTER save · ESC cancel</div>
@@ -1160,7 +1357,6 @@
   <div class="db-row"><span class="db-label">TENS</span> <div class="db-track"><div class="db-bar" id="db-bar-tension" style="background:#ff6688"></div></div><span class="db-val" id="db-val-struct">quiet</span></div>
 </div>
 
-<button id="btn-tune">TUNE</button>
 
 <div id="tune" class="hidden">
   <div class="band-row" id="band-drums">
@@ -1510,7 +1706,6 @@
   <button id="transport-remove" title="Remove file">✕</button>
 </div>
 
-<button id="btn-record">REC</button>
 
 <div id="tutorial-overlay">
   <div id="tutorial-spotlight"></div>

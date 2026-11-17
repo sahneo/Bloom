@@ -19,7 +19,7 @@ const MIN_LAG   = 33;         // 1.0 s ... 0.33 s → 60–180 BPM candidates
 const MAX_LAG   = 100;
 const ACF_LAG   = 400;        // up to 4× the slowest candidate (comb harmonics)
 const ANALYZE_S = 2;
-const OFF_COMB  = 0.15;       // mild off-beat subtraction; 0.7 favored 3:2 impostors on 8th-hats
+const OFF_COMB  = 0.0;       // mild off-beat subtraction; 0.7 favored 3:2 impostors on 8th-hats
 const FFT_LAT   = 0.035;      // frame-path onsets lag the true hit ~35 ms (FFT window centroid + frame)
 
 export class BeatTracker {
@@ -52,6 +52,14 @@ export class BeatTracker {
     this._acfPeriod     = 0;  // latest ACF opinion — anchors how far the PLL may trim
     this._nowS          = 0;
     this._lastPreciseAt = -10; // when the last worklet onset event arrived
+    // Metrical level: the ACF's favourite lag is often HALF the felt tempo
+    // (DnB 172 → 86: the comb at 2× collects bar-level evidence the 1× comb
+    // splits with hat-only positions). _level = 2 doubles the ACF pick when
+    // kicks/snares really do land on the in-between beats.
+    this._level = 1;
+    this._accOn = 0; this._accHalf = 0;   // kick/snare mass on-beat vs half-beat
+    this._accEven = 0; this._accOdd = 0;  // on-beat mass by beat parity
+    this._rawScore = new Float32Array(MAX_LAG + 1);
   }
 
   get bpm() { return 60 / this.period; }
@@ -92,9 +100,12 @@ export class BeatTracker {
   // before now (already corrected for output latency by the caller). Votes
   // phase at the HIT time — frame-time votes are a frame + FFT window late,
   // which is exactly the on-screen misalignment at higher tempos.
-  onsetEvent(agoS, kickMag, snareMag) {
+  onsetEvent(agoS, kickMag, snareMag, hatMag = 0) {
     this._lastPreciseAt = this._nowS;
-    const w = Math.min(kickMag + snareMag * 0.8, 1);
+    // Hats feed the tempo ACF (with a half-time kick the quarter grid lives
+    // only in the hats) but never vote phase — offbeat hats would drag it.
+    const w = Math.min(kickMag + snareMag * 0.8 + hatMag * 0.5, 1);
+    const wPhase = Math.min(kickMag + snareMag * 0.8, 1);
     // Sharpen the ACF input too: deposit the hit into the envelope ring at
     // its true position (the frame path smears it into a later 10 ms bin).
     // Triangular 3-bin kernel, not a single bin — single-bin spikes make the
@@ -108,14 +119,20 @@ export class BeatTracker {
         this._env[idx] = Math.max(this._env[idx], dep);
       }
     }
-    if (w < 0.25 || this.conf <= 0.15) return;
+    if (wPhase < 0.25 || this.conf <= 0.15) return;
     const ph = (((this.beatT - agoS / this.period) % 1) + 1) % 1;
-    this._votePhase(ph, w, 0.45);
+    this._accLevel(ph, wPhase, snareMag);
+    this._votePhase(ph, wPhase, 0.45);
   }
 
   // Shared phase-vote: circular mean + correction pull + 2nd-order PLL.
   // ph in beats [0..1), w = vote weight, pull = correction gain per vote.
   _votePhase(ph, w, pull) {
+    // Once locked, only onsets near the predicted beat vote: syncopated kicks
+    // (16th pushes, the "and" of 2) otherwise bias the circular mean a
+    // tenth of a beat late/early — bench: hip-hop phase 14 %.
+    const dev = ph > 0.5 ? 1 - ph : ph;
+    if (this.conf > 0.5 && Math.hypot(this._phX, this._phY) > 0.8 && dev > 0.15) return;
     const ang = ph * 2 * Math.PI;
     this._phX = this._phX * 0.9 + Math.cos(ang) * w;
     this._phY = this._phY * 0.9 + Math.sin(ang) * w;
@@ -148,6 +165,92 @@ export class BeatTracker {
     const ny  = this._phX * Math.sin(rot) + this._phY * Math.cos(rot);
     this._phX = nx;
     this._phY = ny;
+  }
+
+  // Global phase check: correlate the last ~4 s of onset envelope with a
+  // pulse train at the current period for every offset. The circular-mean
+  // voter converges to the AVERAGE onset phase — with a kick on 1, snares on
+  // the half-beats and a syncopated kick in between (DnB at 86) that average
+  // sits between beats (bench: DnB phase 4 %). The pulse train picks the
+  // offset where the hits actually line up; the voter then fine-tunes.
+  // Only a clearly better offset (+30 %) moves the grid.
+  _alignPhase() {
+    if (this.conf < 0.3) return;
+    const P = this.period * ENV_HZ;
+    const span = Math.min(4 * ENV_HZ, this._envPos - 2);
+    if (span < 2 * P) return;
+    const end = this._envPos - 1;
+    const at = (age) => {                   // env value `age` bins ago, interpolated
+      const i = Math.floor(age), f = age - i;
+      const a = this._env[(((end - i) % ENV_LEN) + ENV_LEN) % ENV_LEN];
+      const b = this._env[(((end - i - 1) % ENV_LEN) + ENV_LEN) % ENV_LEN];
+      return a * (1 - f) + b * f;
+    };
+    const score = (off) => {
+      let sc = 0;
+      for (let age = off; age < span; age += P) sc += Math.max(at(age - 1) * 0.5, at(age), at(age + 1) * 0.5);
+      return sc;
+    };
+    let bestOff = 0, best = -1;
+    for (let off = 0; off < P; off += 1) { const sc = score(off); if (sc > best) { best = sc; bestOff = off; } }
+    // where the current grid puts its most recent beat, in bins ago
+    const fr = ((this.beatT % 1) + 1) % 1;
+    const curOff = fr * P;
+    const cur = score(curOff);
+    if (best > cur * 1.3 && best > 0.5) {
+      // shift so a beat lands bestOff bins ago
+      let d = (fr - bestOff / P);
+      d -= Math.round(d);
+      this.beatT -= d;
+      this._phX = this._phY = 0;
+    }
+  }
+
+  // Metrical-level decision (see _level). Double when kick/snare mass keeps
+  // landing half a beat off the grid; halve back when one beat parity goes
+  // empty. 0.9 vs 0.35 thresholds leave a hysteresis gap so it can't flap.
+  _updateLevel() {
+    const on = this._accOn, half = this._accHalf;
+    const ev = this._accEven, od = this._accOdd;
+    if (this._level === 1 && this.conf > 0.5 && this.bpm * 2 <= 190
+        && on + half > 2 && half >= 0.9 * on
+        && (this._accSnHalf ?? 0) > 1.2 * (this._accSnOn ?? 0)) {
+      this._level = 2; this.period /= 2; this.beatT *= 2;
+      this._resetLevelEvidence();
+    } else if (this._level === 2 && this.conf > 0.4 && ev + od > 2
+        && Math.min(ev, od) < 0.35 * Math.max(ev, od)) {
+      this._level = 1; this.period *= 2; this.beatT /= 2;
+      this._resetLevelEvidence();
+    } else {
+      this._accOn *= 0.7; this._accHalf *= 0.7; this._accEven *= 0.7; this._accOdd *= 0.7;
+      this._accSnOn = (this._accSnOn ?? 0) * 0.7; this._accSnHalf = (this._accSnHalf ?? 0) * 0.7;
+    }
+  }
+
+  // Level evidence: kick/snare mass by position relative to the grid.
+  // Snares are tallied apart: backbeats define the felt pulse while kicks
+  // syncopate freely (hip-hop's "and of 3" kick is not a beat), so doubling
+  // also needs the SNARES to sit on the in-between beats.
+  _accLevel(ph, w, sw = 0) {
+    if (w < 0.2) return;
+    const d0 = ph > 0.5 ? 1 - ph : ph;
+    if (sw > 0.2) {
+      if (d0 < 0.12) this._accSnOn = (this._accSnOn ?? 0) + sw;
+      else if (Math.abs(ph - 0.5) < 0.12) this._accSnHalf = (this._accSnHalf ?? 0) + sw;
+    }
+    if (d0 < 0.12) {
+      this._accOn += w;
+      const idx = Math.round(this.beatT - (ph > 0.5 ? ph - 1 : ph));
+      if (((idx % 2) + 2) % 2 === 0) this._accEven += w; else this._accOdd += w;
+    } else if (Math.abs(ph - 0.5) < 0.12) this._accHalf += w;
+  }
+
+  _resetLevelEvidence() {
+    this._accOn = this._accHalf = this._accEven = this._accOdd = 0;
+    this._accSnOn = this._accSnHalf = 0;
+    this._candVotes = 0;
+    this._slotEnergy.fill(0); this._slotSnare.fill(0); this._slotFlux.fill(0);
+    this._phX = this._phY = 0;
   }
 
   // Call every frame with raw kick/snare/high envelopes (0..1), dt in seconds.
@@ -202,6 +305,7 @@ export class BeatTracker {
     const phasePull = dK + dS * 0.8;
     if (!precise && phasePull > 0.25 && this.conf > 0.15) {
       const ph = (((this.beatT - FFT_LAT / this.period) % 1) + 1) % 1;
+      this._accLevel(ph, Math.min(phasePull, 1), dS);
       this._votePhase(ph, Math.min(phasePull, 1), 0.25);
     }
 
@@ -251,7 +355,7 @@ export class BeatTracker {
     // Log-gaussian tempo prior ~115 BPM resolves remaining octave ties.
     // Scores are EMA-smoothed across analyses so one noisy window can't
     // flip the winner (mid-track BPM wandering).
-    const curLag = this.period * ENV_HZ;
+    const curLag = this.period * this._level * ENV_HZ;
     let bestLag = 0, bestScore = -1;
     for (let lag = MIN_LAG; lag <= MAX_LAG; lag++) {
       let on = 0, off = 0, wOn = 0, wOff = 0;
@@ -272,10 +376,23 @@ export class BeatTracker {
       // Reward staying near the current tempo, in proportion to confidence.
       const relDev = Math.abs(lag - curLag) / curLag;
       if (relDev < 0.06) sc *= 1 + 0.30 * this.conf;
+      this._rawScore[lag] = sc;
       this._scoreEma[lag] = this._scoreEma[lag] * 0.75 + sc * 0.25;
       if (this._scoreEma[lag] > bestScore) { bestScore = this._scoreEma[lag]; bestLag = lag; }
     }
     if (bestLag === 0) return;
+    // A tempo the CURRENT window clearly prefers (and that isn't a metrical
+    // relative) becomes the candidate even while the EMA still favours the
+    // old one — otherwise a DJ tempo change waits for the EMA to forget.
+    {
+      let rb = 0, rs = -1;
+      for (let lag = MIN_LAG; lag <= MAX_LAG; lag++) if (this._rawScore[lag] > rs) { rs = this._rawScore[lag]; rb = lag; }
+      const cl = Math.round(curLag);
+      const rc = (cl >= MIN_LAG && cl <= MAX_LAG) ? this._rawScore[cl] : 0;
+      const ratio = Math.max(rb, curLag) / Math.min(rb, curLag);
+      const metr = [1, 2, 3, 4, 1.5, 4 / 3].some(r => Math.abs(ratio - r) / r < 0.04);
+      if (!metr && this.conf > 0.05 && rs > 1.3 * rc) bestLag = rb;
+    }
 
     // Downbeat: score each candidate "1" by how well the evidence pattern
     // fits it — kick accent ON the candidate, snares on its 2 & 4, novelty
@@ -318,7 +435,7 @@ export class BeatTracker {
     const den = y1 - 2 * y2 + y3;
     let shift = den !== 0 ? 0.5 * (y1 - y3) / den : 0;
     shift = Math.max(-0.5, Math.min(0.5, shift));
-    const newPeriod = (bestLag + shift) / ENV_HZ;
+    const newPeriod = (bestLag + shift) / ENV_HZ / this._level;
     this._acfPeriod = newPeriod;   // PLL trim anchor (see _votePhase)
 
     // Confidence from peak prominence over the candidate range
@@ -352,7 +469,7 @@ export class BeatTracker {
       // saps confidence, and without this guard the 3:2 impostor walked in
       // through the fast path during quiet sections (108 → 162 mid-track).
       const ratio = Math.max(newPeriod, this.period) / Math.min(newPeriod, this.period);
-      const metrical = [2, 3, 4, 1.5, 4 / 3].some(r => Math.abs(ratio - r) / r < 0.06);
+      const metrical = [2, 3, 4, 1.5, 4 / 3].some(r => Math.abs(ratio - r) / r < 0.03);
       const relCand = this._candPeriod > 0
         ? Math.abs(newPeriod - this._candPeriod) / this._candPeriod : 1;
       if (relCand < 0.05) this._candVotes++;
@@ -365,7 +482,7 @@ export class BeatTracker {
       }
     } else {
       const ratio = Math.max(newPeriod, this.period) / Math.min(newPeriod, this.period);
-      let metrical = [2, 3, 4, 1.5, 4 / 3].some(r => Math.abs(ratio - r) / r < 0.06);
+      let metrical = [2, 3, 4, 1.5, 4 / 3].some(r => Math.abs(ratio - r) / r < 0.03);
 
       // Octave-escape exception: a half-tempo lock (the most common octave
       // error) below 100 BPM being challenged by its double is very likely a
@@ -376,10 +493,17 @@ export class BeatTracker {
 
       // A challenger only counts if it clearly out-scores the incumbent tempo —
       // near-ties are exactly the flapping we're suppressing
-      const curLagInt = Math.round(this.period * ENV_HZ);
+      const curLagInt = Math.round(this.period * this._level * ENV_HZ);
       const curScore  = (curLagInt >= MIN_LAG && curLagInt <= MAX_LAG)
         ? this._scoreEma[curLagInt] : 0;
-      const margin = curScore > 1e-6 ? bestScore / curScore : 2;
+      let margin = curScore > 1e-6 ? bestScore / curScore : 2;
+      // A real tempo change (DJ transition, live tempo shift) is judged on
+      // THIS window's evidence — the EMA remembers the old tempo for ~10 s
+      // and kept the switch waiting 20 s+ (bench: pop 100→128).
+      if (!metrical) {
+        const rc = (curLagInt >= MIN_LAG && curLagInt <= MAX_LAG) ? this._rawScore[curLagInt] : 0;
+        if (rc > 1e-6) margin = Math.max(margin, this._rawScore[bestLag] / rc);
+      }
       const clearWin = margin > (metrical ? 1.15 : 1.05);
 
       const relCand = this._candPeriod > 0
@@ -388,7 +512,7 @@ export class BeatTracker {
       else if (relCand < 0.05)        this._candVotes = Math.max(0, this._candVotes - 1);
       else { this._candPeriod = newPeriod; this._candVotes = clearWin ? 1 : 0; }
 
-      const votesNeeded = metrical ? 8 : 3;   // 16 s vs 6 s of consistent evidence
+      const votesNeeded = metrical ? 8 : 2;   // 16 s vs 4 s of consistent evidence
       if (this._candVotes >= votesNeeded) {
         this.period = this._candPeriod;
         this._candVotes = 0;
@@ -397,6 +521,9 @@ export class BeatTracker {
         this.conf = Math.max(0, this.conf - 0.05);    // unstable → drift down
       }
     }
+
+    this._alignPhase();
+    this._updateLevel();
 
     const bpmNow = Math.round(this.bpm);
     if (this.conf > 0.35 && Math.abs(bpmNow - this._lastLoggedBpm) >= 2) {

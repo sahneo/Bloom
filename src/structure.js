@@ -120,6 +120,17 @@ export class StructureAnalyzer {
     // condition only ARMS the drop; the blast FIRES on the beat grid: right
     // away if a beat just passed, else exactly on the next predicted beat.
     this._sinceDropMs += dtMs;
+    // Kick presence over the last ~¼ s: classified worklet hits are short
+    // spikes (not the old smeared FFT envelope), so the frame where every
+    // other drop condition holds rarely coincides with the spike itself.
+    this._kickHold = Math.max(bands.kick, (this._kickHold ?? 0) * Math.exp(-dtS / 0.25));
+    // Kick-return precursor: classified kicks make "the kick has been gone
+    // for 4 s+" a reliable breakdown signal on its own — the bass-band one
+    // is fooled by full-spectrum risers that the AGC lifts into "bass"
+    // (bench: house riser read as bass back before the drop, 0/2 drops).
+    const kickNow = bands.kick > 0.55;
+    const kickReturn = kickNow && (this._noKickMs ?? 0) > 4000;
+    this._noKickMs = kickNow ? 0 : (this._noKickMs ?? 0) + dtMs;
     this._tenseMs = this.tension > 0.65 ? this._tenseMs + dtMs : 0;
     const deepBreak = this._bassLowMs > 2200;
     const primed    = deepBreak || this._tenseMs > 2500;
@@ -134,12 +145,24 @@ export class StructureAnalyzer {
     const bassBack = bassRel > (deepBreak ? 0.95 : 1.30);
     const punch    = deepBreak ? (slam || fluxJump) : ((energyJump || fluxJump) && slam);
     if (playing && primed && this._playMs > 12000
-        && bassBack && bands.kick > 0.55 && punch
+        && bassBack && this._kickHold > 0.55 && punch
         && this._sinceDropMs > 15000 && this._dropPendingMs <= 0) {
+      this._armDrop = true;
+    }
+    if (!this._armDrop && playing && kickReturn && this._playMs > 12000
+        && (primed || this.tension > 0.4 || this._bassLowMs > 0)
+        && this._sinceDropMs > 15000 && this._dropPendingMs <= 0) {
+      this._armDrop = true;
+      this._kickReturnDrop = true;
+    }
+    if (this._armDrop) {
+      this._armDrop = false;
       this._dropPendingMs = beat.conf > 0.4 ? beat.period * 1200 : 1;  // ≤1.2 beats
       // magnitude: a deep breakdown resolved with both loudness and novelty
       // is a MAJOR drop; anything less is minor (presets scale their drama)
-      this._dropStrength = (deepBreak && bassRel > 1.15 && (fluxJump || energyJump)) ? 1.0 : 0.7;
+      this._dropStrength = (deepBreak && bassRel > 1.15 && (fluxJump || energyJump))
+        || (this._kickReturnDrop && primed) ? 1.0 : 0.7;
+      this._kickReturnDrop = false;
     }
     if (this._dropPendingMs > 0) {
       const phase   = beat.beatT % 1;
