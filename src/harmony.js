@@ -30,6 +30,14 @@ const DISSONANCE_TABLE = [
 const MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
 const MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
 
+// Albrecht & Shanahan (2013) corpus profiles — used for AUDIO chroma.
+// K-S profiles come from listener ratings and are nearly flat between scale
+// degrees; on audio chroma they kept confusing relative/dominant keys
+// (bench: key root 34 %). These are pitch-class distributions measured in
+// real pieces, sharper on tonic/dominant and the 3rd that decides the mode.
+const AS_MAJOR = [0.238, 0.006, 0.111, 0.006, 0.137, 0.094, 0.016, 0.214, 0.009, 0.080, 0.008, 0.081];
+const AS_MINOR = [0.220, 0.006, 0.104, 0.123, 0.019, 0.103, 0.012, 0.214, 0.062, 0.022, 0.061, 0.052];
+
 // Rotate profile so index 0 maps to pitch class `root`
 function rotateTo(profile, root) {
   return Array.from({ length: 12 }, (_, i) => profile[(i - root + 12) % 12]);
@@ -214,7 +222,9 @@ export class HarmonyAnalyzer {
   // running K-S. A 2s window followed whatever CHORD was sounding (an Am→C→G
   // progression flipped tonality every bar); 7s spans several bars, so the
   // histogram reflects the KEY while individual chords average out.
-  updateFromChroma(chroma, fftEnergy = 0) {
+  // weight (0..1, optional): how tonal this frame is — drum-only frames
+  // smear energy over all 12 classes and should barely move the key.
+  updateFromChroma(chroma, fftEnergy = 0, weight = 1) {
     const now     = performance.now();
     const deltaMs = now - this._lastUpdateMs;
     this._lastUpdateMs = now;
@@ -222,7 +232,7 @@ export class HarmonyAnalyzer {
     // ── Step 1: accumulate chromagram over ~7 seconds ───────────────────
     if (!this._chromaAccum) this._chromaAccum = new Float32Array(12);
     // alpha = 1 - e^(-dt/τ) ≈ dt/τ for small dt; τ = 7000ms
-    const alpha = Math.min(deltaMs / 7000, 0.05);
+    const alpha = Math.min(deltaMs / 7000, 0.05) * weight;
     if (fftEnergy > 0.02) {
       // Signal present: integrate new chromagram into accumulator
       for (let i = 0; i < 12; i++) {
@@ -233,20 +243,19 @@ export class HarmonyAnalyzer {
       for (let i = 0; i < 12; i++) this._chromaAccum[i] *= 0.998;
     }
 
-    // ── Step 2: normalise + γ=3 to suppress residual noise ─────────────
+    // ── Step 2: normalise. The chroma now arrives median-filtered and
+    //    tonal-weighted (pitch.js), so no γ sharpening — γ=3 threw away the
+    //    3rd/6th that separate a minor key from its relative major.
     let histMax = 0.001;
     for (let i = 0; i < 12; i++) histMax = Math.max(histMax, this._chromaAccum[i]);
     const histogram = new Float32Array(12);
-    for (let i = 0; i < 12; i++) {
-      const n = this._chromaAccum[i] / histMax;
-      histogram[i] = n * n * n;   // γ=3: peaks stay ~1, background noise → 0
-    }
+    for (let i = 0; i < 12; i++) histogram[i] = this._chromaAccum[i] / histMax;
 
-    // ── Step 3: K-S correlation ─────────────────────────────────────────
+    // ── Step 3: key-profile match (Albrecht–Shanahan) ─────────────────────────────────────────
     let bestMajor = 0, bestMinor = 0, rootMajor = 0, rootMinor = 0;
     for (let root = 0; root < 12; root++) {
-      const mj = dot(histogram, rotateTo(MAJOR_PROFILE, root));
-      const mn = dot(histogram, rotateTo(MINOR_PROFILE, root));
+      const mj = dot(histogram, rotateTo(AS_MAJOR, root));
+      const mn = dot(histogram, rotateTo(AS_MINOR, root));
       if (mj > bestMajor) { bestMajor = mj; rootMajor = root; }
       if (mn > bestMinor) { bestMinor = mn; rootMinor = root; }
     }

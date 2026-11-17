@@ -1578,7 +1578,7 @@ async function init() {
     const midiSilentMs = performance.now() - lastMidiMs;
     const harm = (lastMidiMs > 0 && midiSilentMs < 8000)
       ? harmony.update(fftEnergy)
-      : harmony.updateFromChroma(audio.chromagram, fftEnergy);
+      : harmony.updateFromChroma(audio.chromagram, fftEnergy, audio.pitch?.chromaWeight ?? 1);
     params.tonality   = harm.tonality;
     params.pulse      = harm.pulse;
     params.dissonance = harm.dissonance;

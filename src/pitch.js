@@ -64,9 +64,9 @@ export class PitchTracker {
       const m = hzToMidi(k * this.binHz);
       const near = Math.round(m), dev = Math.abs(m - near);
       this._cPc[k] = ((near % 12) + 12) % 12;
-      // bins between semitones count little; bass register at half weight
-      // (it is mostly root notes — good for key, but it shouldn't dominate)
-      this._cW[k] = Math.max(0, 1 - dev * 2.5) * (m < 48 ? 0.5 : 1);
+      // bins between semitones count little; below E2 a semitone is under
+      // one FFT bin, so the lowest register is down-weighted (it smears)
+      this._cW[k] = Math.max(0, 1 - dev * 2.5) * (m < 40 ? 0.6 : 1);
     }
     this._medRing = Array.from({ length: MED_N }, () => new Float32Array(hi + 1));
     this._medPos = 0;
@@ -268,5 +268,12 @@ export class PitchTracker {
     for (let i = 0; i < 12; i++) mx = Math.max(mx, c[i]);
     for (let i = 0; i < 12; i++) this.chroma[i] = c[i] / mx;
     this.chromaEnergy = mx;
+    // Tonal weight 0..1 for key accumulation: chroma contrast (max vs mean)
+    // is high for chords/notes and near 1 for drum noise, which smears over
+    // all 12 classes (intro measured flat 0.36–1.0 across classes).
+    let sum = 0;
+    for (let i = 0; i < 12; i++) sum += this.chroma[i];
+    const contrast = 12 / Math.max(sum, 1e-6);           // 1 = flat … 12 = one class
+    this.chromaWeight = Math.max(0, Math.min(1, (contrast - 1.6) / 1.4)) * (1 - Math.min(kick, 1) * 0.7);
   }
 }

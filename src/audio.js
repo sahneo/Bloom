@@ -509,6 +509,7 @@ export class AudioAnalyser {
       // Bass / melody notes (+ cleaner chroma) from the same 8192 analyser
       if (!this.pitch) this.pitch = new PitchTracker(this.context.sampleRate, this.chromaAnalyser.fftSize);
       this.pitch.update(this.chromaAnalyser, this._kick);
+      this.chromagram = this.pitch.chroma;
     } else {
       this.chromagram = this._computeChromagram(binHz, this.dataArray);
     }
