@@ -169,6 +169,7 @@ class DigitaktMode {
     const wasPlaying = st.playing, pat = st.pattern;
     st.feed(d, now, 'midi');
     // re-read the pattern when it can have changed under us
+    if ((d[0] & 0xf0) === 0xc0) this.pcSeen = true;
     if ((st.playing && !wasPlaying) || st.pattern !== pat) this._wantDump();
   }
 
@@ -183,7 +184,9 @@ class DigitaktMode {
       return;
     }
     if (D.fails >= 4) return;                       // box doesn't answer — give up quietly
-    const every = 1500 + D.ms * 3;                  // never more than ~25 % of the link
+    // a dump is ~28 KB and briefly holds up the clock — while playing, re-read
+    // rarely (PLAY / pattern change still trigger an immediate read)
+    const every = (this.state.playing ? 5000 : 1500) + D.ms * 3;
     if (!D.want && now - D.last < every) return;
     if (now - D.last < 250) return;
     D.want = false; D.pending = now; D.slot = this.state.pattern;
@@ -253,7 +256,8 @@ class DigitaktMode {
       : !this.dtOut ? '' : st.seq ? ` · ${st.tracks[st.viewTrack()].name}${st.focusTrack < 0 ? ' (T)' : ''}`
       : D?.fails >= 4 ? ` · pattern not readable${D.err ? ' (' + D.err + ')' : ''} — see I` : ' · reading pattern…';
     const text = `DIGITAKT · ${this.lookIdx + 1}/${LOOKS.length} ${look} · ${src}${bpm} · ${st.patternName()}${sync}` +
-      (showHelp ? (narrow ? '\ntap = next look' : '\nL next look · 1–4 pick · T track · X demo · I monitor · F fullscreen · Esc exit · tap = next look') : '');
+      (showHelp ? (narrow ? '\ntap = next look' : '\nL next look · 1–4 pick · T track · [ ] pattern · X demo · I monitor · F fullscreen · Esc exit · tap = next look') : '') +
+      (showHelp && this.patternManual && !this.pcSeen ? '\nDigitakt sends no pattern changes: SETTINGS › MIDI CONFIG › SYNC › PROG CH SEND = ON' : '');
     if (text !== this._hudText) { this.hud.textContent = text; this._hudText = text; }
     this.hud.style.opacity = showHelp ? '1' : '0.45';
     if (this.showMonitor) {
@@ -276,6 +280,10 @@ class DigitaktMode {
     else if (k >= '1' && k <= String(LOOKS.length)) this.setLook(+k - 1);
     else if (k === 'x') { this.demoWanted = !this.demoWanted; if (this.demoWanted) this.state.seq = null; this.hudUntil = performance.now() + 2500; }
     else if (k === 'i') this.showMonitor = !this.showMonitor;
+    else if (e.key === '[' || e.key === ']') {   // pick the pattern by hand when the box doesn't send Program Change
+      const s = this.state; s.pattern = (s.pattern + (e.key === ']' ? 1 : 127)) % 128; s.patternFlash = 1; s.seq = null;
+      this.patternManual = true; this._wantDump(); this.hudUntil = performance.now() + 4000;
+    }
     else if (k === 't') { const s = this.state; s.focusTrack = s.focusTrack >= 7 ? -1 : s.focusTrack + 1; this.hudUntil = performance.now() + 2500; }
     else if (k === 'f') { if (document.fullscreenElement) document.exitFullscreen(); else this.root.requestFullscreen?.(); }
     else if (e.key === 'Escape') this.unmount();
